@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [develop, main]
+  push:
+    branches: [develop, main]
+
+jobs:
+  build-lint-test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: exam_user
+          POSTGRES_PASSWORD: exam_pass
+          POSTGRES_DB: secure_exam_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U exam_user -d secure_exam_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build shared packages
+        run: npm run typecheck
+
+      - name: Lint API
+        run: npm run api:lint
+
+      - name: Build API
+        run: npm run api:build
+
+      - name: Test API
+        run: npm run api:test
+        env:
+          DATABASE_URL: postgres://exam_user:exam_pass@localhost:5432/secure_exam_test
+          JWT_ACCESS_SECRET: ci-access-secret
+          JWT_ACCESS_EXPIRES_IN: 15m
+          JWT_REFRESH_SECRET: ci-refresh-secret
+          JWT_REFRESH_EXPIRES_IN: 7d
+          CORS_ORIGIN: http://localhost:3001
+          THROTTLE_TTL: 60
+          THROTTLE_LIMIT: 10
