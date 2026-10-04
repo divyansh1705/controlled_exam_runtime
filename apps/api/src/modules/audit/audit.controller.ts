@@ -13,42 +13,46 @@ import { AuditService } from './audit.service';
 export class AuditController {
   constructor(private readonly auditService: AuditService) {}
 
+  /**
+   * Supports both Person A's query params (type, actorId, limit, offset)
+   * and Person C's richer filters (examId, attemptId, eventType, page).
+   */
   @Get()
   @Roles(Role.ADMIN)
-  @ApiQuery({
-    name: 'type',
-    enum: AuditEventType,
-    required: false,
-    description: 'Filter by event type. Leave empty to return all types.',
-  })
-  @ApiQuery({
-    name: 'actorId',
-    required: false,
-    description: 'Filter by the user id who performed the action. Leave empty for all actors.',
-  })
-  @ApiQuery({
-    name: 'limit',
-    required: false,
-    type: Number,
-    description: 'Max results to return. Defaults to 50 if omitted.',
-  })
-  @ApiQuery({
-    name: 'offset',
-    required: false,
-    type: Number,
-    description: 'Pagination offset. Defaults to 0 if omitted.',
-  })
+  @ApiQuery({ name: 'type', enum: AuditEventType, required: false })
+  @ApiQuery({ name: 'actorId', required: false })
+  @ApiQuery({ name: 'examId', required: false })
+  @ApiQuery({ name: 'attemptId', required: false })
+  @ApiQuery({ name: 'eventType', required: false })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiQuery({ name: 'offset', required: false, type: Number })
+  @ApiQuery({ name: 'page', required: false, type: Number })
   findAll(
     @Query('type') type?: AuditEventType,
     @Query('actorId') actorId?: string,
+    @Query('examId') examId?: string,
+    @Query('attemptId') attemptId?: string,
+    @Query('eventType') eventType?: string,
     @Query('limit') limit?: string,
     @Query('offset') offset?: string,
+    @Query('page') page?: string,
   ) {
-    return this.auditService.findAll({
-      type,
+    if (offset !== undefined) {
+      return this.auditService.findAll({
+        type,
+        actorId,
+        limit: limit ? Number(limit) : undefined,
+        offset: Number(offset),
+      });
+    }
+
+    return this.auditService.listEvents({
+      examId,
+      attemptId,
+      eventType: eventType ?? type,
       actorId,
-      limit: limit ? Number(limit) : undefined,
-      offset: offset ? Number(offset) : undefined,
+      page: page ? Number(page) : 1,
+      limit: limit ? Number(limit) : 50,
     });
   }
 }

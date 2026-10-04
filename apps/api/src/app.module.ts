@@ -7,6 +7,7 @@ import { ConfigModule as NestConfigModule, ConfigService } from '@nestjs/config'
 import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { ScheduleModule } from '@nestjs/schedule';
 import { ConfigModule } from './common/config/config.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
@@ -17,10 +18,16 @@ import { AuthModule } from './modules/auth/auth.module';
 import { StudentEntity } from './modules/user/entities/student.entity';
 import { UserEntity } from './modules/user/entities/user.entity';
 import { UserModule } from './modules/user/user.module';
+import { ExamModule } from './modules/exam/exam.module';
+import { QuestionModule } from './modules/question/question.module';
+import { AttemptModule } from './modules/attempt/attempt.module';
+import { AnswerModule } from './modules/answer/answer.module';
 
 @Module({
   imports: [
     ConfigModule, // validated env, isGlobal
+
+    ScheduleModule.forRoot(), // Required by AttemptExpirySweepService (@Cron)
 
     TypeOrmModule.forRootAsync({
       imports: [NestConfigModule],
@@ -29,9 +36,8 @@ import { UserModule } from './modules/user/user.module';
         type: 'postgres',
         url: config.get<string>('DATABASE_URL'),
         entities: [UserEntity, StudentEntity, AuditEventEntity],
-        // Phase 1 dev convenience only — migrations own schema changes from
-        // here on; synchronize is switched off as soon as the first
-        // migration exists so nobody's local DB silently drifts.
+        // autoLoadEntities picks up entities registered in each module's
+        // TypeOrmModule.forFeature(), so we don't have to list them all here.
         synchronize: config.get<string>('NODE_ENV') !== 'production',
         autoLoadEntities: true,
       }),
@@ -48,12 +54,17 @@ import { UserModule } from './modules/user/user.module';
       ],
     }),
 
-    AuditModule, // @Global — exports AuditService for B and C
+    AuditModule,    // @Global — exports AuditService for all modules
     AuthModule,
     UserModule,
 
-    // Person B adds: ExamModule, QuestionModule here.
-    // Person C adds: AttemptModule, AnswerModule here.
+    // Person B modules
+    ExamModule,
+    QuestionModule,
+
+    // Person C modules
+    AttemptModule,
+    AnswerModule,
   ],
   providers: [
     // Rate limiting on every route by default.

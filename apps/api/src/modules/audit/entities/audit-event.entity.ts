@@ -1,6 +1,5 @@
 // Owner: Person A (Identity/Auth/Security)
 
-import { AuditEventType } from '@secure-exam/types';
 import {
   Column,
   CreateDateColumn,
@@ -15,8 +14,8 @@ export class AuditEventEntity {
   id!: string;
 
   @Index()
-  @Column({ type: 'enum', enum: AuditEventType })
-  type!: AuditEventType;
+  @Column({ type: 'varchar', length: 128, nullable: true })
+  type!: string;
 
   @Index()
   @Column({ type: 'uuid', nullable: true })
@@ -27,6 +26,12 @@ export class AuditEventEntity {
 
   @Column({ type: 'varchar', length: 64, nullable: true })
   ipAddress!: string | null;
+
+  @Column({ type: 'uuid', nullable: true })
+  examId!: string | null;
+
+  @Column({ type: 'uuid', nullable: true })
+  attemptId!: string | null;
 
   @CreateDateColumn()
   createdAt!: Date;
