@@ -43,22 +43,17 @@ function Sidebar() {
         <nav className="mt-8 flex flex-col gap-1">
           {NAV_ITEMS.map((item) => {
             const isActive = pathname?.startsWith(item.href);
-            const isBuilt = item.owner === 'A';
             return (
               <Link
                 key={item.href}
-                href={isBuilt ? item.href : '#'}
-                aria-disabled={!isBuilt}
+                href={item.href}
                 className={`flex items-center justify-between rounded px-3 py-2 text-sm transition-colors ${
                   isActive
                     ? 'bg-verdigris text-white'
-                    : isBuilt
-                      ? 'text-paper/80 hover:bg-ink-light'
-                      : 'cursor-not-allowed text-paper/30'
+                    : 'text-paper/80 hover:bg-ink-light'
                 }`}
               >
                 <span>{item.label}</span>
-                {!isBuilt && <span className="text-[10px] uppercase tracking-wide">Soon</span>}
               </Link>
             );
           })}
