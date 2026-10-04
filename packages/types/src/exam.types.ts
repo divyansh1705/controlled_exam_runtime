@@ -1,6 +1,10 @@
-// Owner: Person B (Exam Content Domain)
-// Day-0 placeholder shape so Person C can compile FK references (Attempt.examId)
-// before Person B's real Exam module lands. Person B fills this in.
+/**
+ * Owner: Person B (Exam Content Domain)
+ *
+ * Plain type/interface declarations only — no logic lives here.
+ * Both apps/api and apps/admin-web import from this file so the
+ * shape of an Exam never drifts between backend and frontend.
+ */
 
 export enum ExamStatus {
   DRAFT = 'DRAFT',
@@ -9,11 +13,52 @@ export enum ExamStatus {
   CLOSED = 'CLOSED',
 }
 
+/** Allowed forward transitions for the exam state machine. Enforced in ExamService — never trust the client. */
+export const EXAM_STATUS_TRANSITIONS: Record<ExamStatus, ExamStatus[]> = {
+  [ExamStatus.DRAFT]: [ExamStatus.SCHEDULED],
+  [ExamStatus.SCHEDULED]: [ExamStatus.ACTIVE],
+  [ExamStatus.ACTIVE]: [ExamStatus.CLOSED],
+  [ExamStatus.CLOSED]: [],
+};
+
 export interface Exam {
   id: string;
   title: string;
+  description?: string;
+  durationMinutes: number;
+  startTime: string; // ISO 8601
+  endTime: string; // ISO 8601
+  status: ExamStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Row in the exam_assignments join table — links a student to an exam. */
+export interface ExamAssignment {
+  id: string;
+  examId: string;
+  studentId: string;
+  assignedAt: string;
+}
+
+// ---- Request/response shapes used by packages/api-client ----
+
+export interface CreateExamRequest {
+  title: string;
+  description?: string;
   durationMinutes: number;
   startTime: string;
   endTime: string;
-  status: ExamStatus;
+}
+
+export interface UpdateExamRequest {
+  title?: string;
+  description?: string;
+  durationMinutes?: number;
+  startTime?: string;
+  endTime?: string;
+}
+
+export interface AssignStudentRequest {
+  studentId: string;
 }

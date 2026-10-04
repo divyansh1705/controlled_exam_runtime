@@ -13,6 +13,8 @@
     "admin:dev": "npm run dev --workspace=apps/admin-web",
     "admin:build": "npm run build --workspace=apps/admin-web",
     "admin:lint": "npm run lint --workspace=apps/admin-web",
+    "migration:run": "npm run migration:run --workspace=apps/api",
+    "migration:revert": "npm run migration:revert --workspace=apps/api",
     "typecheck": "npm run build --workspace=packages/types && npm run build --workspace=packages/validation && npm run build --workspace=packages/api-client"
   },
   "devDependencies": {
