@@ -3,7 +3,7 @@
 // added following the same one-file-per-domain pattern since Person A owns
 // student management on both backend and admin portal.
 
-import type { Student } from '@secure-exam/types';
+import type { Student, StudentLookupResponse } from '@secure-exam/types';
 import { apiClient } from './client';
 
 export interface CreateStudentPayload {
@@ -47,4 +47,33 @@ export async function updateStudent(
 ): Promise<StudentWithUser> {
   const { data } = await apiClient.patch<StudentWithUser>(`/students/${id}`, payload);
   return data;
+}
+
+/** Resolve a college ID (e.g. "CS2021001") to the full student record.
+ *  Returns null if no student found (404). Used before assigning to exam. */
+export async function lookupStudentByCollegeId(
+  collegeId: string,
+): Promise<StudentLookupResponse | null> {
+  try {
+    const { data } = await apiClient.get<StudentLookupResponse>(
+      `/students/lookup?collegeId=${encodeURIComponent(collegeId)}`,
+    );
+    return data;
+  } catch (err: unknown) {
+    const status = (err as { response?: { status?: number } })?.response?.status;
+    if (status === 404) return null;
+    throw err;
+  }
+}
+
+/** Fetch a single student by UUID */
+export async function getStudentById(id: string): Promise<StudentLookupResponse | null> {
+  try {
+    const { data } = await apiClient.get<StudentLookupResponse>(`/students/${id}`);
+    return data;
+  } catch (err: unknown) {
+    const status = (err as { response?: { status?: number } })?.response?.status;
+    if (status === 404) return null;
+    throw err;
+  }
 }

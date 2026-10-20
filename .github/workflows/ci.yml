@@ -45,6 +45,15 @@ jobs:
       - name: Build API
         run: npm run api:build
 
+      - name: Typecheck web app
+        run: npm run web:typecheck
+
+      - name: Test web app
+        run: npm run web:test
+
+      - name: Build web app
+        run: npm run web:build
+
       - name: Test API
         run: npm run api:test
         env:

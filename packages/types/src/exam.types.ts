@@ -29,16 +29,28 @@ export interface Exam {
   startTime: string; // ISO 8601
   endTime: string; // ISO 8601
   status: ExamStatus;
+  /** Person A (publish): ISO 8601 once published to registered students, else null. */
+  publishedAt: string | null;
+  /** Person A (publish): pass mark as a percentage of the maximum score. */
+  passPercentage: number;
   createdAt: string;
   updatedAt: string;
 }
 
-/** Row in the exam_assignments join table — links a student to an exam. */
+/** Row in the exam_assignments join table — links a student to an exam.
+ *  studentInfo is populated by the API when listing assignments. */
 export interface ExamAssignment {
   id: string;
   examId: string;
   studentId: string;
   assignedAt: string;
+  /** Populated by the backend join — always present on list responses */
+  studentInfo?: {
+    userId?: string;
+    collegeId: string;
+    fullName: string;
+    email: string;
+  };
 }
 
 // ---- Request/response shapes used by packages/api-client ----
@@ -49,6 +61,7 @@ export interface CreateExamRequest {
   durationMinutes: number;
   startTime: string;
   endTime: string;
+  passPercentage?: number;
 }
 
 export interface UpdateExamRequest {
@@ -57,8 +70,18 @@ export interface UpdateExamRequest {
   durationMinutes?: number;
   startTime?: string;
   endTime?: string;
+  passPercentage?: number;
 }
 
 export interface AssignStudentRequest {
   studentId: string;
+}
+
+/** Used by the admin UI to resolve a college ID to a student before assigning */
+export interface StudentLookupResponse {
+  id: string;
+  collegeId: string;
+  fullName: string;
+  email: string;
+  isActive: boolean;
 }

@@ -1,0 +1,69 @@
+# Phase 4 ownership (9-day plan). Replace the placeholder handles with the
+# team's GitHub usernames. The owner of a path reviews every PR touching it;
+# shared files list all three so additive one-liners need any one approval.
+#
+#   @person-a  Platform, UX, courses, publish, results
+#   @person-b  Question bank, Python code runner, question-wise results
+#   @person-c  Time extension, dashboard, Electron, kiosk & security
+
+# ---- Shared files (additive one-liners only; don't reorder others' lines) ----
+/apps/web/src/app/                                   @person-a @person-b @person-c
+/apps/web/src/features/exam-taking/questionRenderers.registry.tsx @person-c @person-b
+/apps/web/src/features/results/tabs.registry.ts      @person-a @person-b
+/apps/web/src/features/exams/examTabs.registry.ts    @person-a @person-b @person-c
+/apps/api/src/common/events/                         @person-a @person-b @person-c
+/apps/api/src/common/scoring/                        @person-a @person-b
+/apps/api/src/app.module.ts                          @person-a @person-b @person-c
+/apps/api/src/database/data-source.ts                @person-a @person-b @person-c
+/packages/*/src/index.ts                             @person-a @person-b @person-c
+/.env.example                                        @person-a @person-b @person-c
+/apps/api/.env.example                               @person-a @person-b @person-c
+/docker-compose*.yml                                 @person-a @person-b @person-c
+
+# ---- Person A ----
+/apps/web/src/auth/                                  @person-a
+/apps/web/src/components/ui/                         @person-a
+/apps/web/src/layouts/                               @person-a
+/apps/web/src/features/auth/                         @person-a
+/apps/web/src/features/courses/                      @person-a
+/apps/web/src/features/exams/                        @person-a
+/apps/web/src/features/students/                     @person-a
+/apps/web/src/features/results/                      @person-a
+/apps/web/src/features/notifications/                @person-a
+/apps/api/src/modules/course/                        @person-a
+/apps/api/src/modules/publish/                       @person-a
+/apps/api/src/modules/notification/                  @person-a
+/apps/api/src/modules/results/                       @person-a
+/apps/api/src/modules/auth/                          @person-a
+/apps/api/src/modules/user/                          @person-a
+/apps/api/src/database/migrations/*-A-*.ts           @person-a
+/packages/types/src/course.types.ts                  @person-a
+/packages/types/src/publish.types.ts                 @person-a
+/packages/types/src/notification.types.ts            @person-a
+/packages/types/src/results.types.ts                 @person-a
+/docs/analytics-data-contract.md                     @person-a
+
+# ---- Person B ----
+/apps/api/src/modules/code-runner/                   @person-b
+/apps/api/src/modules/question/                      @person-b
+/apps/api/src/modules/exam/                          @person-b @person-a
+/apps/web/src/features/question-bank/                @person-b
+/apps/web/src/features/coding/                       @person-b
+/apps/api/src/database/migrations/*-B-*.ts           @person-b
+/packages/types/src/question-bank.types.ts           @person-b
+/packages/types/src/coding.types.ts                  @person-b
+
+# ---- Person C ----
+/apps/web/src/features/exam-taking/                  @person-c
+/apps/web/src/features/monitoring/                   @person-c
+/apps/web/src/features/dashboard/                    @person-c
+/apps/api/src/modules/attempt/                       @person-c
+/apps/api/src/modules/answer/                        @person-c
+/apps/api/src/modules/extension/                     @person-c
+/apps/api/src/modules/dashboard/                     @person-c
+/apps/api/src/database/migrations/*-C-*.ts           @person-c
+/apps/desktop/                                       @person-c
+/infra/                                              @person-c
+/packages/types/src/extension.types.ts               @person-c
+/packages/types/src/dashboard.types.ts               @person-c
+/packages/types/src/client-security.types.ts         @person-c

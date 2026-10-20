@@ -1,7 +1,83 @@
+# Dependencies
 node_modules/
-dist/
-coverage/
+
+# Environment files and secrets
+# Only *.env.example files (placeholders, no real values) are committed.
 .env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+*.cer
+*.keystore
+*.jks
+id_rsa*
+id_ed25519*
+secrets/
+
+# Build output
+**/dist/
+**/build/
+**/.next/
+**/out/
+**/coverage/
+**/*.tsbuildinfo
+
+# Electron (Person C): packaged installers and builder output
+**/release/
+**/dist-electron/
+*.exe
+*.msi
+*.dmg
+*.AppImage
+*.deb
+*.snap
+
+# Archives and dumps (can silently contain .env files or data)
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.rar
+*.7z
+*.sql.gz
+*.dump
+
+# Local databases (SQLite offline store, etc.)
+*.sqlite
+*.sqlite3
+*.db
+
+# Runtime and log files
 *.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.pid
+
+# Test and tool caches
+.nyc_output/
+.eslintcache
+.cache/
+.vite/
+.turbo/
+.vitest-cache/
+
+# IDE and OS files
+.vscode/
+.idea/
+*.swp
+*.swo
 .DS_Store
-.next/
+._*
+__MACOSX/
+Thumbs.db
+desktop.ini
+
+# Local Docker overrides
+docker-compose.override.yml

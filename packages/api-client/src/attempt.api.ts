@@ -9,8 +9,10 @@ import { apiClient } from './client';
 import type {
   Attempt,
   AttemptMonitorView,
+  HeartbeatResponse,
   AttemptStatus,
   Answer,
+  PublicQuestion,
   Submission,
   Result,
 } from '@secure-exam/types';
@@ -23,6 +25,11 @@ export interface StartAttemptPayload {
 
 export function startAttempt(payload: StartAttemptPayload): Promise<Attempt> {
   return apiClient.post<Attempt>('/attempts', payload).then((res) => res.data);
+}
+
+/** Student-only: the caller's own attempt at an exam (404 if not started), for resuming it. */
+export function getMyAttemptForExam(examId: string): Promise<Attempt> {
+  return apiClient.get<Attempt>('/attempts/current', { params: { examId } }).then((res) => res.data);
 }
 
 export function getAttempt(attemptId: string): Promise<Attempt> {
@@ -48,8 +55,14 @@ export function listAttempts(params: ListAttemptsParams = {}): Promise<Paginated
   return apiClient.get<PaginatedAttempts>('/attempts', { params }).then((res) => res.data);
 }
 
-export function sendHeartbeat(attemptId: string): Promise<void> {
-  return apiClient.post(`/attempts/${attemptId}/heartbeat`).then(() => undefined);
+/** Student-only: the attempt's exam questions, without the answer key. */
+export function getAttemptQuestions(attemptId: string): Promise<PublicQuestion[]> {
+  return apiClient.get<PublicQuestion[]>(`/attempts/${attemptId}/questions`).then((res) => res.data);
+}
+
+/** Liveness ping; the response is the client's clock source (server time + current expiry). */
+export function sendHeartbeat(attemptId: string): Promise<HeartbeatResponse> {
+  return apiClient.post<HeartbeatResponse>(`/attempts/${attemptId}/heartbeat`).then((res) => res.data);
 }
 
 // ---- Answers ------------------------------------------------------------
