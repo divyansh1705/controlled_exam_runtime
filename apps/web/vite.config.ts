@@ -17,6 +17,7 @@ export default defineConfig({
       '@': resolve(__dirname, './src'),
       '@secure-exam/types': resolve(__dirname, '../../packages/types/src/index.ts'),
       '@secure-exam/api-client': resolve(__dirname, '../../packages/api-client/src/index.ts'),
+      '@secure-exam/exam-content-ui': resolve(__dirname, '../../packages/exam-content-ui/src/index.ts'),
     },
   },
   server: {
@@ -27,5 +28,6 @@ export default defineConfig({
   },
   test: {
     environment: 'jsdom',
+    setupFiles: ['src/test-setup.ts'],
   },
 });

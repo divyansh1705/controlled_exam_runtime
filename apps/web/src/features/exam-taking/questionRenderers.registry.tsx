@@ -7,6 +7,7 @@
 import { QuestionType } from '@secure-exam/types';
 import type { PublicQuestion } from '@secure-exam/types';
 import type { ComponentType } from 'react';
+import { CodingRenderer } from './components/CodingRenderer';
 import { QuestionRenderer as McqQuestionRenderer } from './components/QuestionRenderer';
 
 export interface QuestionRendererProps {
@@ -30,4 +31,5 @@ export const questionRenderers: Record<string, ComponentType<QuestionRendererPro
   [QuestionType.MCQ_SINGLE]: McqRenderer,
   [QuestionType.MCQ_MULTI]: McqRenderer,
   [QuestionType.TRUE_FALSE]: McqRenderer,
+  [QuestionType.CODING]: CodingRenderer, // B
 };

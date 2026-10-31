@@ -19,6 +19,8 @@ interface ExamState {
 
   // Actions
   initExam: (questionIds: string[]) => void;
+  /** Bumped each time saved answers are loaded; lets editors re-seed from the restored draft. */
+  restoreVersion: number;
   loadSavedAnswers: (saved: Record<string, { selectedOptionIds: string[] | null; textResponse: string | null; state: QuestionState }>) => void;
   setCurrentIndex: (index: number) => void;
   goToNext: () => void;
@@ -41,6 +43,7 @@ export const useExamStore = create<ExamState>((set, get) => ({
   answers: {},
   questionStates: {},
   markedForReview: {},
+  restoreVersion: 0,
 
   initExam: (questionIds: string[]) => {
     const states: Record<string, QuestionState> = {};
@@ -91,6 +94,7 @@ export const useExamStore = create<ExamState>((set, get) => ({
         questionStates: nextStates,
         answers: nextAnswers,
         markedForReview: nextReviews,
+        restoreVersion: state.restoreVersion + 1,
       };
     });
   },
