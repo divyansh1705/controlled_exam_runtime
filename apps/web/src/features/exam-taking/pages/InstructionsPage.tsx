@@ -19,7 +19,11 @@ import { ErrorState } from '@/components/ui/error-state';
 import { Skeleton } from '@/components/ui/skeleton';
 import { getErrorMessage, getErrorStatus } from '@/lib/errors';
 import { formatDateTime, formatRelative } from '@/lib/format';
+import { OpenInExamApp } from '../components/OpenInExamApp';
 import { useAttempt } from '../contexts/AttemptContext';
+import { isDesktop } from '../desktop/desktop';
+import { REQUIRE_DESKTOP_EXAM } from '../desktop/requireDesktop';
+import { ReadinessGate } from '../desktop/ReadinessGate';
 
 const INSTRUCTIONS = [
   'Read each question carefully before answering.',
@@ -37,6 +41,8 @@ export default function InstructionsPage() {
   const [agreed, setAgreed] = useState(false);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Always true in a browser; in the exam app, true once the readiness checks pass.
+  const [kioskReady, setKioskReady] = useState(false);
 
   const { data: exam, isPending, error: loadError, refetch } = useQuery({
     queryKey: ['me', 'exams', examId],
@@ -96,6 +102,8 @@ export default function InstructionsPage() {
   }
 
   const resumable = exam.attemptStatus === AttemptStatus.IN_PROGRESS && exam.attemptId;
+  // In a browser the exam is opened in the exam app; the real start happens there.
+  const openInApp = REQUIRE_DESKTOP_EXAM && !isDesktop() && (resumable || exam.state === StudentExamState.LIVE);
 
   return (
     <Shell>
@@ -127,10 +135,14 @@ export default function InstructionsPage() {
             ))}
           </ul>
 
+          <ReadinessGate onReady={setKioskReady} />
+
           {error && <Alert variant="destructive">{error}</Alert>}
 
-          {resumable ? (
-            <Button size="lg" onClick={() => enter(exam.attemptId!)}>
+          {openInApp ? (
+            <OpenInExamApp examId={examId} resuming={!!resumable} />
+          ) : resumable ? (
+            <Button size="lg" onClick={() => enter(exam.attemptId!)} disabled={!kioskReady}>
               <PlayCircle /> Resume exam
             </Button>
           ) : exam.state === StudentExamState.LIVE ? (
@@ -144,7 +156,7 @@ export default function InstructionsPage() {
                 />
                 I have read the instructions. I understand the timer starts as soon as I begin and cannot be paused.
               </label>
-              <Button size="lg" onClick={handleStart} disabled={!agreed} loading={starting}>
+              <Button size="lg" onClick={handleStart} disabled={!agreed || !kioskReady} loading={starting}>
                 <PlayCircle /> Start exam
               </Button>
             </>
