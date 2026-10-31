@@ -4,6 +4,8 @@
 > sign-in, role-based landing). `apps/admin-web` and `apps/exam-client` still
 > run but are legacy until the Day 7 merge. What changed and the shared
 > contracts are in [docs/phase4-contracts.md](docs/phase4-contracts.md).
+> The Electron exam app, its kiosk decisions and open follow-ups are in
+> [docs/kiosk-integration.md](docs/kiosk-integration.md).
 
 ## Prerequisites
 
@@ -112,7 +114,7 @@ npm run migration:run
 
 Run migrations before starting the API: in development TypeORM's `synchronize` creates new tables, but only the migrations copy Phase 1 exam assignments into exam registrations. Without them, students can't start exams (registration is now required).
 
-Optionally, seed development data: an admin (`admin@secure-exam.dev` / `Admin@1234`), three students (`alice@`, `bob@`, `carol@secure-exam.dev` / `Student@1234`), a course `CS201` they are enrolled in, and an active, published exam, ID `11111111-1111-4111-8111-111111111111`, with five questions, registered to that course. The seed is idempotent; re-running it also moves the exam's time window forward. Never run it in production.
+Optionally, seed development data: an admin (`admin@secure-exam.dev` / `Admin@1234`), three students (`alice@`, `bob@`, `carol@secure-exam.dev` / `Student@1234`), a course `CS201` they are enrolled in, and an active, published exam, ID `11111111-1111-4111-8111-111111111111`, with five questions, registered to that course. It also fills the question bank with 18 easy DSA/Python questions (6 single choice, 6 multiple choice, 6 true/false) and six easy coding questions that aren't attached to any exam, ready to add from an exam's **Questions** tab. The seed is idempotent; re-running it also moves the exam's time window forward. Never run it in production.
 ```bash
 npm run db:seed
 ```
