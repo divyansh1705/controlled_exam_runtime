@@ -7,7 +7,7 @@
     "packages/*"
   ],
   "scripts": {
-    "api:start": "npm run start:dev --workspace=apps/api",
+    "api:start": "npm run typecheck && npm run start:dev --workspace=apps/api",
     "api:build": "npm run build --workspace=apps/api",
     "api:lint": "npm run lint --workspace=apps/api",
     "api:test": "npm run test --workspace=apps/api",
@@ -15,9 +15,15 @@
     "admin:build": "npm run build --workspace=apps/admin-web",
     "admin:lint": "npm run lint --workspace=apps/admin-web",
     "client:dev": "npm run dev --workspace=@secure-exam/exam-client-renderer",
+    "client:desktop": "npm run desktop:dev --workspace=@secure-exam/exam-client-desktop",
+    "desktop:compile": "npm run compile --workspace=@secure-exam/exam-client-desktop",
+    "desktop:build": "npm run desktop:build --workspace=@secure-exam/exam-client-desktop",
     "client:build": "npm run build --workspace=@secure-exam/exam-client-renderer",
     "client:test": "npm run test --workspace=@secure-exam/exam-client-renderer",
     "client:typecheck": "npm run typecheck --workspace=@secure-exam/exam-client-renderer",
+    "content-ui:dev": "npm run dev --workspace=@secure-exam/exam-content-ui",
+    "content-ui:test": "npm run test --workspace=@secure-exam/exam-content-ui",
+    "content-ui:typecheck": "npm run typecheck --workspace=@secure-exam/exam-content-ui",
     "migration:run": "npm run migration:run --workspace=apps/api",
     "migration:revert": "npm run migration:revert --workspace=apps/api",
     "typecheck": "npm run build --workspace=packages/types && npm run build --workspace=packages/validation && npm run build --workspace=packages/api-client",
@@ -25,9 +31,14 @@
     "web:dev": "npm run dev --workspace=@secure-exam/web",
     "web:build": "npm run build --workspace=@secure-exam/web",
     "web:test": "npm run test --workspace=@secure-exam/web",
-    "web:typecheck": "npm run typecheck --workspace=@secure-exam/web"
+    "web:typecheck": "npm run typecheck --workspace=@secure-exam/web",
+    "desktop:test": "npm test --workspace=@secure-exam/exam-client-desktop",
+    "dev": "npm run desktop:compile && concurrently -k -n api,web -c blue,green \"npm run api:start\" \"npm run web:dev\"",
+    "exam:app": "node scripts/exam-app.mjs",
+    "exam:register": "node scripts/register-exam-protocol.mjs"
   },
   "devDependencies": {
-    "typescript": "^5.4.5"
+    "typescript": "^5.4.5",
+    "concurrently": "^8.2.2"
   }
 }

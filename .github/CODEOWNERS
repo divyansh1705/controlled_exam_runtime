@@ -44,12 +44,17 @@
 /docs/analytics-data-contract.md                     @person-a
 
 # ---- Person B ----
-/apps/api/src/modules/code-runner/                   @person-b
+/apps/api/src/modules/execution/                     @person-b
+/apps/api/src/modules/coding/                        @person-b
+/apps/api/src/modules/question-bank/                 @person-b
+/apps/api/src/modules/question-analytics/            @person-b
+/packages/exam-content-ui/                           @person-b
+/packages/types/src/question-analytics.types.ts      @person-b
 /apps/api/src/modules/question/                      @person-b
 /apps/api/src/modules/exam/                          @person-b @person-a
 /apps/web/src/features/question-bank/                @person-b
-/apps/web/src/features/coding/                       @person-b
 /apps/api/src/database/migrations/*-B-*.ts           @person-b
+/apps/api/src/database/migrations/17600001*.ts       @person-b
 /packages/types/src/question-bank.types.ts           @person-b
 /packages/types/src/coding.types.ts                  @person-b
 
@@ -62,7 +67,9 @@
 /apps/api/src/modules/extension/                     @person-c
 /apps/api/src/modules/dashboard/                     @person-c
 /apps/api/src/database/migrations/*-C-*.ts           @person-c
-/apps/desktop/                                       @person-c
+/apps/exam-client/                                   @person-c
+/apps/api/src/modules/client-security/               @person-c
+/scripts/                                            @person-c
 /infra/                                              @person-c
 /packages/types/src/extension.types.ts               @person-c
 /packages/types/src/dashboard.types.ts               @person-c
