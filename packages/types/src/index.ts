@@ -6,6 +6,9 @@ export * from './auth.types';
 export * from './audit.types';
 export * from './exam.types';
 export * from './question.types';
+export * from './coding.types';
+export * from './question-bank.types';
+export * from './question-analytics.types';
 export * from './attempt.types';
 export * from './answer.types';
 
@@ -17,5 +20,3 @@ export * from './results.types';        // A
 export * from './extension.types';      // C
 export * from './dashboard.types';      // C
 export * from './client-security.types'; // C (contract only)
-export * from './question-bank.types';  // B (contract only)
-export * from './coding.types';         // B (contract only)
