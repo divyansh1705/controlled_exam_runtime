@@ -15,6 +15,7 @@
     "@radix-ui/react-slot": "^1.2.3",
     "@radix-ui/react-tabs": "^1.1.12",
     "@secure-exam/api-client": "*",
+    "@secure-exam/exam-content-ui": "*",
     "@secure-exam/types": "*",
     "@tanstack/react-query": "^5.51.1",
     "class-variance-authority": "^0.7.1",

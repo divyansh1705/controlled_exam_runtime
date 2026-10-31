@@ -4,6 +4,7 @@
 // (who-answered-which matrix, per-student drill-down, submitted code).
 
 import type { ComponentType } from 'react';
+import { QuestionsTab } from '@secure-exam/exam-content-ui';
 import { OverviewTab } from './tabs/OverviewTab';
 import { StudentsTab } from './tabs/StudentsTab';
 
@@ -21,4 +22,5 @@ export interface ResultsTab {
 export const resultsTabs: ResultsTab[] = [
   { id: 'overview', label: 'Overview', component: OverviewTab, owner: 'A' },
   { id: 'students', label: 'Students', component: StudentsTab, owner: 'A' },
+  { id: 'questions', label: 'Questions', component: QuestionsTab, owner: 'B' },
 ];

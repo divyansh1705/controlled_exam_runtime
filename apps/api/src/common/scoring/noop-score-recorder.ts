@@ -9,11 +9,11 @@ import type { RecordScoreInput, ScoreRecorder } from './score-recorder.interface
 export class NoopScoreRecorder implements ScoreRecorder {
   private readonly logger = new Logger(NoopScoreRecorder.name);
 
-  async record(input: RecordScoreInput): Promise<void> {
+  async record(input: RecordScoreInput, _manager?: unknown): Promise<void> {
     this.logger.debug(`Discarding score for attempt ${input.attemptId}, question ${input.questionId}`);
   }
 
-  async recordMany(attemptId: string, inputs: Omit<RecordScoreInput, 'attemptId'>[]): Promise<void> {
+  async recordMany(attemptId: string, inputs: Omit<RecordScoreInput, 'attemptId'>[], _manager?: unknown): Promise<void> {
     this.logger.debug(`Discarding ${inputs.length} score(s) for attempt ${attemptId}`);
   }
 }

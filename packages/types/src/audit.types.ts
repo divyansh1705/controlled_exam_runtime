@@ -28,6 +28,11 @@ export enum AuditEventType {
   QUESTION_DELETED = 'QUESTION_DELETED',
   QUESTIONS_BULK_IMPORTED = 'QUESTIONS_BULK_IMPORTED',
 
+  // Coding events (Person B)
+  CODE_SUBMITTED = 'CODE_SUBMITTED',
+  CODE_GRADED = 'CODE_GRADED',
+  RESULTS_RECALCULATED = 'RESULTS_RECALCULATED',
+
   // Student assignment events (Person B)
   STUDENT_ASSIGNED = 'STUDENT_ASSIGNED',
   STUDENT_UNASSIGNED = 'STUDENT_UNASSIGNED',
@@ -38,6 +43,8 @@ export enum AuditEventType {
   SUBMITTED = 'SUBMITTED',
   AUTO_SUBMITTED = 'AUTO_SUBMITTED',
   SECURITY_CHECK_FAILED = 'SECURITY_CHECK_FAILED',
+  /** Exam-app violations (blocked shortcuts, focus loss...) reported during an attempt. */
+  SECURITY_VIOLATION = 'SECURITY_VIOLATION',
 
   // Result events (Person C)
   RESULT_SCORE_OVERRIDDEN = 'RESULT_SCORE_OVERRIDDEN',

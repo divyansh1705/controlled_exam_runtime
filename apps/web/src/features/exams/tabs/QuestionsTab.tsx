@@ -1,10 +1,11 @@
-// Owner: Person A (port of the Phase 1 screen). Person B replaces the
-// "add from bank" list with the question-bank Add-to-exam dialog.
+// Owner: Person A (port of the Phase 1 screen). Person B's Add-to-exam dialog
+// (exam-content-ui) replaces the old inline "add from bank" list.
 
-import { addQuestionToExam, getExamQuestions, getQuestions, removeQuestionFromExam } from '@secure-exam/api-client';
+import { PickForExamDialog } from '@secure-exam/exam-content-ui';
+import { getExamQuestions, removeQuestionFromExam } from '@secure-exam/api-client';
 import type { QuestionWithOptions } from '@secure-exam/types';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { FileQuestion, Minus, Plus, Search } from 'lucide-react';
+import { FileQuestion, Minus, Plus } from 'lucide-react';
 import { useState } from 'react';
 import { Alert } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
@@ -12,20 +13,25 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { EmptyState } from '@/components/ui/empty-state';
 import { ErrorState } from '@/components/ui/error-state';
-import { Input } from '@/components/ui/input';
 import { TableSkeleton } from '@/components/ui/skeleton';
 import { toast } from '@/components/ui/toast';
+import { useCourseOptions } from '@/features/question-bank/useCourseOptions';
 import { getErrorMessage } from '@/lib/errors';
 import type { ExamTabProps } from '../examTabs.registry';
 
-const TYPE_LABELS: Record<string, string> = { MCQ_SINGLE: 'Single choice', MCQ_MULTI: 'Multiple choice', TRUE_FALSE: 'True / false' };
+const TYPE_LABELS: Record<string, string> = {
+  MCQ_SINGLE: 'Single choice',
+  MCQ_MULTI: 'Multiple choice',
+  TRUE_FALSE: 'True / false',
+  CODING: 'Coding',
+};
 
 export function QuestionsTab({ exam }: ExamTabProps) {
   const queryClient = useQueryClient();
-  const [search, setSearch] = useState('');
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const courses = useCourseOptions();
   const [busyId, setBusyId] = useState<string | null>(null);
   const inExam = useQuery({ queryKey: ['exams', exam.id, 'questions'], queryFn: () => getExamQuestions(exam.id) });
-  const bank = useQuery({ queryKey: ['questions'], queryFn: getQuestions });
   const locked = !!exam.publishedAt;
 
   async function run(id: string, action: () => Promise<unknown>, done: string) {
@@ -43,9 +49,6 @@ export function QuestionsTab({ exam }: ExamTabProps) {
 
   if (inExam.error) return <ErrorState message={getErrorMessage(inExam.error)} onRetry={() => inExam.refetch()} />;
 
-  const attachedIds = new Set((inExam.data ?? []).map((q) => q.id));
-  const q = search.trim().toLowerCase();
-  const available = (bank.data ?? []).filter((item) => !attachedIds.has(item.id) && (!q || item.text.toLowerCase().includes(q)));
   const totalMarks = (inExam.data ?? []).reduce((sum, item) => sum + item.marks, 0);
 
   return (
@@ -85,39 +88,26 @@ export function QuestionsTab({ exam }: ExamTabProps) {
 
       {!locked && (
         <Card>
-          <CardHeader className="gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <CardHeader className="flex-row items-center justify-between">
             <CardTitle>Add from the question bank</CardTitle>
-            <div className="relative w-full sm:w-72">
-              <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
-              <Input className="pl-8" placeholder="Search question text" value={search} onChange={(e) => setSearch(e.target.value)} aria-label="Search the question bank" />
-            </div>
+            <Button variant="outline" size="sm" onClick={() => setPickerOpen(true)}>
+              <Plus /> Add questions…
+            </Button>
           </CardHeader>
           <CardContent>
-            {bank.isPending ? (
-              <TableSkeleton rows={3} columns={3} />
-            ) : available.length === 0 ? (
-              <p className="py-4 text-center text-sm text-muted-foreground">
-                {bank.data?.length ? 'Every matching question is already in this exam.' : 'The question bank is empty.'}
-              </p>
-            ) : (
-              <ul className="max-h-96 divide-y overflow-y-auto rounded-md border">
-                {available.map((item) => (
-                  <QuestionRow key={item.id} question={item}>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      loading={busyId === item.id}
-                      onClick={() => run(item.id, () => addQuestionToExam(exam.id, { questionId: item.id }), 'Question added')}
-                    >
-                      <Plus /> Add
-                    </Button>
-                  </QuestionRow>
-                ))}
-              </ul>
-            )}
+            <p className="text-sm text-muted-foreground">
+              Pick ready questions from the bank, including coding problems. Questions can be added until the exam is published.
+            </p>
           </CardContent>
         </Card>
       )}
+      <PickForExamDialog
+        examId={exam.id}
+        open={pickerOpen}
+        onClose={() => setPickerOpen(false)}
+        courses={courses}
+        onAdded={() => queryClient.invalidateQueries({ queryKey: ['exams', exam.id, 'questions'] })}
+      />
     </div>
   );
 }

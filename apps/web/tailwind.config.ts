@@ -5,7 +5,7 @@ import animate from 'tailwindcss-animate';
 // "Examination Register" palette: ink, paper, verdigris, brick, gold.
 const config: Config = {
   darkMode: ['class'],
-  content: ['./index.html', './src/**/*.{ts,tsx}'],
+  content: ['./index.html', './src/**/*.{ts,tsx}', '../../packages/exam-content-ui/src/**/*.{ts,tsx}'],
   theme: {
     container: { center: true, padding: '1.5rem', screens: { '2xl': '1400px' } },
     extend: {

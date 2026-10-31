@@ -8,6 +8,7 @@ import { dashboardRoutes } from '@/features/dashboard/routes';
 import { examTakingRoutes } from '@/features/exam-taking/routes';
 import { adminExamRoutes } from '@/features/exams/routes';
 import { monitoringRoutes } from '@/features/monitoring/routes';
+import { questionBankRoutes } from '@/features/question-bank/routes';
 import { resultsRoutes } from '@/features/results/routes';
 import { studentAdminRoutes } from '@/features/students/routes';
 
@@ -18,6 +19,7 @@ export const adminRoutes: RouteObject[] = [
   ...studentAdminRoutes, // A
   ...resultsRoutes, // A (B adds the Questions tab via results/tabs.registry.ts)
   ...monitoringRoutes, // C
+  ...questionBankRoutes, // B
 ];
 
 /** Under /student, inside StudentLayout. */

@@ -2,7 +2,7 @@
 // Add your entry as ONE line; don't reorder other people's.
 
 import type { LucideIcon } from 'lucide-react';
-import { Activity, BarChart3, BookOpen, ClipboardList, LayoutDashboard, Users } from 'lucide-react';
+import { Activity, BarChart3, BookOpen, ClipboardList, LayoutDashboard, Library, Users } from 'lucide-react';
 
 export interface NavItem {
   to: string;
@@ -17,7 +17,7 @@ export const adminNav: NavItem[] = [
   { to: '/admin/students', label: 'Students', icon: Users, owner: 'A' },
   { to: '/admin/results', label: 'Results', icon: BarChart3, owner: 'A' },
   { to: '/admin/monitoring', label: 'Live monitoring', icon: Activity, owner: 'C' },
-  // B: { to: '/admin/questions', label: 'Question bank', icon: Library, owner: 'B' },
+  { to: '/admin/questions', label: 'Question bank', icon: Library, owner: 'B' },
 ];
 
 export const studentNav: NavItem[] = [

@@ -13,16 +13,22 @@ import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/auth/AuthContext';
 import { useAttempt } from '../contexts/AttemptContext';
+import { isDesktop } from '../desktop/desktop';
 import { useSyncStatus } from '../hooks/useSyncStatus';
+import { ExamAppSubmitted } from './ExamAppSubmitted';
 
+/** In the exam app the exam ends on a final message and nothing else; the browser keeps its dashboard. */
 export default function SubmittedPage() {
+  return isDesktop() ? <ExamAppSubmitted /> : <BrowserSubmitted />;
+}
+
+function BrowserSubmitted() {
   const { user, logout } = useAuth();
   const { setAttemptId } = useAttempt();
   const navigate = useNavigate();
   // Person C's queued submission (e.g. the timer ran out while offline).
   const submit = useSyncStatus((s) => s.submit);
   const isPending = submit === 'pending';
-
   async function handleLogout() {
     // Clear the attempt reference — exam is done.
     setAttemptId(null);
