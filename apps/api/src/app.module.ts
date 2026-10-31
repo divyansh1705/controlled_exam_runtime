@@ -10,6 +10,7 @@ import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { ScheduleModule } from '@nestjs/schedule';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { ConfigModule } from './common/config/config.module';
+import { HealthController } from './common/health/health.controller';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 import { AuditLoggingInterceptor } from './common/interceptors/audit-logging.interceptor';
@@ -21,6 +22,9 @@ import { UserEntity } from './modules/user/entities/user.entity';
 import { UserModule } from './modules/user/user.module';
 import { ExamModule } from './modules/exam/exam.module';
 import { QuestionModule } from './modules/question/question.module';
+import { CodingModule } from './modules/coding/coding.module';
+import { QuestionBankModule } from './modules/question-bank/question-bank.module';
+import { QuestionAnalyticsModule } from './modules/question-analytics/question-analytics.module';
 import { AttemptModule } from './modules/attempt/attempt.module';
 import { AnswerModule } from './modules/answer/answer.module';
 import { CourseModule } from './modules/course/course.module';
@@ -29,8 +33,10 @@ import { PublishModule } from './modules/publish/publish.module';
 import { ResultsModule } from './modules/results/results.module';
 import { ExtensionModule } from './modules/extension/extension.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
+import { ClientSecurityModule } from './modules/client-security/client-security.module';
 
 @Module({
+  controllers: [HealthController],
   imports: [
     ConfigModule, // validated env, isGlobal
 
@@ -71,6 +77,9 @@ import { DashboardModule } from './modules/dashboard/dashboard.module';
     // Person B modules
     ExamModule,
     QuestionModule,
+    CodingModule,
+    QuestionBankModule,
+    QuestionAnalyticsModule,
 
     // Person C modules
     AttemptModule,
@@ -85,6 +94,7 @@ import { DashboardModule } from './modules/dashboard/dashboard.module';
     // Phase 4 — Person C
     ExtensionModule,
     DashboardModule,
+    ClientSecurityModule,
   ],
   providers: [
     // Rate limiting on every route by default.
