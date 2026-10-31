@@ -121,6 +121,23 @@ describe('SubmissionService', () => {
   });
 
   describe('submit', () => {
+    it('counts CODE questions in maxScore only, without flagging manual review (Person B grades them)', async () => {
+      questionLookup.getQuestionsForExam.mockResolvedValue([
+        { id: 'q-1', marks: 1, answerFormat: 'SINGLE_CHOICE', optionIds: ['opt-a'], correctOptionIds: ['opt-a'] },
+        { id: 'q-code', marks: 10, answerFormat: 'CODE' },
+      ]);
+      managerAnswerRepo.find.mockResolvedValue([
+        { questionId: 'q-1', selectedOptionIds: ['opt-a'], textResponse: null },
+        { questionId: 'q-code', selectedOptionIds: null, textResponse: 'print(1)' },
+      ]);
+
+      const { result } = await service.submit('attempt-1', student, {});
+
+      expect(result.score).toBe(1);
+      expect(result.maxScore).toBe(11);
+      expect(result.needsManualReview).toBe(false);
+    });
+
     it('emits attempt.submitted once the submission has committed', async () => {
       await service.submit('attempt-1', student, {});
 

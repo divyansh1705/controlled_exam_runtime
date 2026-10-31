@@ -8,7 +8,12 @@
 // Recording is an upsert keyed by (attemptId, questionId): the latest call
 // wins. After every write the attempt's Result.score is recomputed as the
 // sum of its question scores.
+//
+// Pass `manager` to write inside a transaction you already hold (Person B's
+// code grader does, so the grade and its score commit together). Without it,
+// the recorder opens its own transaction.
 
+import type { EntityManager } from 'typeorm';
 import type { ScoreSource } from '@secure-exam/types';
 
 export const SCORE_RECORDER = Symbol('SCORE_RECORDER');
@@ -27,7 +32,11 @@ export interface RecordScoreInput {
 }
 
 export interface ScoreRecorder {
-  record(input: RecordScoreInput): Promise<void>;
+  record(input: RecordScoreInput, manager?: EntityManager): Promise<void>;
   /** Records several scores for one attempt, then recomputes its total once. */
-  recordMany(attemptId: string, inputs: Omit<RecordScoreInput, 'attemptId'>[]): Promise<void>;
+  recordMany(
+    attemptId: string,
+    inputs: Omit<RecordScoreInput, 'attemptId'>[],
+    manager?: EntityManager,
+  ): Promise<void>;
 }

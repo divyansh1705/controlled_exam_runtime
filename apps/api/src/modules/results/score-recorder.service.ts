@@ -14,40 +14,52 @@ import { QuestionScoreEntity } from './entities/question-score.entity';
 export class ScoreRecorderService implements ScoreRecorder {
   constructor(@InjectDataSource() private readonly dataSource: DataSource) {}
 
-  async record(input: RecordScoreInput): Promise<void> {
+  async record(input: RecordScoreInput, manager?: EntityManager): Promise<void> {
     const { attemptId, ...rest } = input;
-    await this.recordMany(attemptId, [rest]);
+    await this.recordMany(attemptId, [rest], manager);
   }
 
-  async recordMany(attemptId: string, inputs: Omit<RecordScoreInput, 'attemptId'>[]): Promise<void> {
-    await this.dataSource.transaction(async (manager) => {
-      const attempt = await manager.getRepository(AttemptEntity).findOne({ where: { id: attemptId } });
-      if (!attempt) throw new NotFoundException(`Attempt ${attemptId} not found`);
+  async recordMany(
+    attemptId: string,
+    inputs: Omit<RecordScoreInput, 'attemptId'>[],
+    manager?: EntityManager,
+  ): Promise<void> {
+    // Join the caller's transaction when given one, otherwise open our own.
+    if (manager) return this.write(manager, attemptId, inputs);
+    await this.dataSource.transaction((m) => this.write(m, attemptId, inputs));
+  }
 
-      if (inputs.length > 0) {
-        await manager
-          .createQueryBuilder()
-          .insert()
-          .into(QuestionScoreEntity)
-          .values(
-            inputs.map((input) => ({
-              attemptId,
-              examId: attempt.examId,
-              studentId: attempt.studentId,
-              questionId: input.questionId,
-              source: input.source,
-              score: input.score,
-              maxScore: input.maxScore,
-              isCorrect: input.isCorrect ?? null,
-              details: input.details ?? null,
-            })) as QueryDeepPartialEntity<QuestionScoreEntity>[],
-          )
-          .orUpdate(['source', 'score', 'maxScore', 'isCorrect', 'details', 'gradedAt'], ['attemptId', 'questionId'])
-          .execute();
-      }
+  private async write(
+    manager: EntityManager,
+    attemptId: string,
+    inputs: Omit<RecordScoreInput, 'attemptId'>[],
+  ): Promise<void> {
+    const attempt = await manager.getRepository(AttemptEntity).findOne({ where: { id: attemptId } });
+    if (!attempt) throw new NotFoundException(`Attempt ${attemptId} not found`);
 
-      await this.recomputeResult(manager, attemptId);
-    });
+    if (inputs.length > 0) {
+      await manager
+        .createQueryBuilder()
+        .insert()
+        .into(QuestionScoreEntity)
+        .values(
+          inputs.map((input) => ({
+            attemptId,
+            examId: attempt.examId,
+            studentId: attempt.studentId,
+            questionId: input.questionId,
+            source: input.source,
+            score: input.score,
+            maxScore: input.maxScore,
+            isCorrect: input.isCorrect ?? null,
+            details: input.details ?? null,
+          })) as QueryDeepPartialEntity<QuestionScoreEntity>[],
+        )
+        .orUpdate(['source', 'score', 'maxScore', 'isCorrect', 'details', 'gradedAt'], ['attemptId', 'questionId'])
+        .execute();
+    }
+
+    await this.recomputeResult(manager, attemptId);
   }
 
   /** Result.score := sum of the attempt's question scores. No-op if there is no Result yet. */
