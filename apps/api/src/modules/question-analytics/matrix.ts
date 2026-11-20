@@ -2,10 +2,10 @@
  * Owner: Person B. Pure computation of the students × questions matrix and
  * per-question stats. No I/O, so every rule is unit-tested.
  *
- * MCQ correctness uses the same exact-set rule as the attempt scorer
- * (computeScore): full marks only when the selected options equal the
- * correct set. Coding cells use the final code submission's score.
- * Swap MCQ scoring for Person A's QuestionScore rows once they exist.
+ * MCQ scoring is the same rule as Person A's grader (results/mcq-evaluator.ts):
+ * full marks only when the selected options equal the correct set, minus the
+ * question's negative marks for a wrong answer, 0 when unanswered. Coding
+ * cells use the final code submission's score.
  */
 
 import {
@@ -24,6 +24,8 @@ export interface MatrixQuestion {
   text: string;
   type: QuestionType;
   marks: number;
+  /** Marks taken away for a wrong objective answer (0 or missing: none). */
+  negativeMarks?: number | null;
   options: { id: string; isCorrect: boolean; text?: string }[];
 }
 
@@ -95,7 +97,7 @@ export function buildCell(
     const right = correct.size > 0 && correct.size === picked.size && [...correct].every((id) => picked.has(id));
     return right
       ? { ...base, state: QuestionCellState.CORRECT, score: q.marks }
-      : { ...base, state: QuestionCellState.WRONG, score: 0 };
+      : { ...base, state: QuestionCellState.WRONG, score: q.negativeMarks ? -q.negativeMarks : 0 };
   }
 
   if (q.type === QuestionType.CODING) {
@@ -122,12 +124,29 @@ export function buildCell(
     : { ...base, state: QuestionCellState.NOT_ANSWERED, score: 0 };
 }
 
+/** Manual adjustments (#13) by `attemptId|questionId`: marks added (+) or taken away (−). */
+export type AdjustmentMap = Map<string, number>;
+export const adjustmentKey = key;
+
+/**
+ * Applies a manual adjustment (#13): score = clamp(auto + adjustment, 0, max).
+ * A cell that isn't graded yet (PENDING) stays as it is: there is nothing to
+ * adjust until grading finishes. The state (correct/partial/wrong) stays the
+ * automatic one; `autoScore` and `adjustment` show that marks were changed.
+ */
+export function applyAdjustment(cell: AnalyticsCell, adjustment: number | undefined): AnalyticsCell {
+  if (!adjustment || cell.score === null) return cell;
+  const score = round2(Math.min(Math.max(cell.score + adjustment, 0), cell.maxScore));
+  return { ...cell, autoScore: cell.score, adjustment, score };
+}
+
 export function buildMatrix(
   questions: MatrixQuestion[],
   attempts: MatrixAttempt[],
   answers: MatrixAnswer[],
   finals: MatrixFinalCode[],
   submitted: SubmittedKeys,
+  adjustments: AdjustmentMap = new Map(),
 ): MatrixResult {
   const answerBy = new Map(answers.map((a) => [key(a.attemptId, a.questionId), a]));
   const finalBy = new Map(finals.map((f) => [key(f.attemptId, f.questionId), f]));
@@ -139,7 +158,7 @@ export function buildMatrix(
     let answeredCount = 0;
     for (const q of questions) {
       const k = key(a.attemptId, q.id);
-      const cell = buildCell(q, a, answerBy.get(k), finalBy.get(k), submitted.has(k));
+      const cell = applyAdjustment(buildCell(q, a, answerBy.get(k), finalBy.get(k), submitted.has(k)), adjustments.get(k));
       cells.push(cell);
       if (cell.score !== null) score += cell.score;
       if (cell.state !== QuestionCellState.NOT_ANSWERED) answeredCount++;
