@@ -59,6 +59,25 @@ export class AttemptEntity {
   @Column({ type: 'timestamptz', nullable: true })
   submittedAt: Date | null;
 
+  @Column({ type: 'uuid', nullable: true })
+  lastQuestionId: string | null;
+
+  @Column({ type: 'uuid', nullable: true })
+  activeSessionId: string | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  deviceChangeRequestedAt: Date | null;
+
+  @Column({ type: 'varchar', nullable: true, select: false })
+  deviceChangeTokenHash: string | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  deviceChangeApprovedAt: Date | null;
+
+  /** Timer stopped since then, for an invigilator-approved device change (see timer-pause.ts). */
+  @Column({ type: 'timestamptz', nullable: true })
+  timerPausedAt: Date | null;
+
   @CreateDateColumn({ type: 'timestamptz' })
   createdAt: Date;
 

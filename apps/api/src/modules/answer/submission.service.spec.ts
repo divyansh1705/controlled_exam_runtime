@@ -29,7 +29,7 @@ function makeRepoMock() {
 describe('SubmissionService', () => {
   let service: SubmissionService;
   // The plain repositories injected via @InjectRepository — used only by
-  // the read-only admin endpoints (listSubmissions/getResultForAttempt/etc.).
+  // the read-only staff endpoints (listSubmissions/getResultForAttempt/etc.).
   let submissionRepo: ReturnType<typeof makeRepoMock>;
   let resultRepo: ReturnType<typeof makeRepoMock>;
   // The repositories/entity returned by `manager.getRepository(...)` inside
@@ -45,6 +45,7 @@ describe('SubmissionService', () => {
     markSubmitted: jest.Mock;
     markAutoSubmitted: jest.Mock;
     findExpiredInProgressAttemptIds: jest.Mock;
+    releaseLapsedTimerPauses: jest.Mock;
   };
   let timerService: { isAttemptValid: jest.Mock };
   let questionLookup: jest.Mocked<IQuestionLookupService>;
@@ -91,6 +92,7 @@ describe('SubmissionService', () => {
       markSubmitted: jest.fn().mockResolvedValue(undefined),
       markAutoSubmitted: jest.fn().mockResolvedValue(undefined),
       findExpiredInProgressAttemptIds: jest.fn().mockResolvedValue([]),
+      releaseLapsedTimerPauses: jest.fn().mockResolvedValue(0),
     };
     timerService = { isAttemptValid: jest.fn().mockReturnValue(true) };
     questionLookup = {
@@ -366,7 +368,7 @@ describe('SubmissionService', () => {
         updatedAt: new Date(),
       });
 
-      await expect(service.overrideScore('attempt-1', 5, 'admin-1')).rejects.toThrow(BadRequestException);
+      await expect(service.overrideScore('attempt-1', 5, 'instructor-1')).rejects.toThrow(BadRequestException);
       expect(resultRepo.save).not.toHaveBeenCalled();
     });
 
@@ -386,14 +388,14 @@ describe('SubmissionService', () => {
         updatedAt: new Date(),
       });
 
-      const result = await service.overrideScore('attempt-1', 3, 'admin-1');
+      const result = await service.overrideScore('attempt-1', 3, 'instructor-1');
 
       expect(result.score).toBe(3);
       expect(result.needsManualReview).toBe(false);
       expect(auditService.logEvent).toHaveBeenCalledWith(
         'RESULT_SCORE_OVERRIDDEN',
         expect.objectContaining({ attemptId: 'attempt-1', newScore: 3 }),
-        'admin-1',
+        'instructor-1',
       );
     });
   });
