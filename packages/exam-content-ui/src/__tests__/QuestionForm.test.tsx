@@ -1,11 +1,17 @@
 import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { QuestionStatus, QuestionType } from '@secure-exam/types';
+import { CODE_LANGUAGE_ORDER, CODE_LANGUAGES, CodeLanguage, NO_TOPIC, QuestionStatus, QuestionType } from '@secure-exam/types';
 import { QuestionForm } from '../question-bank/QuestionForm';
 import { createFakeApi, seedState } from '../testing/fakeApi';
 import { renderWithApi } from './render';
 
 const typeSelect = () => screen.getByLabelText('Type') as HTMLSelectElement;
+const topicSelect = () => screen.getByLabelText('Topic') as HTMLSelectElement;
+/** Picks a topic once the topic list has loaded. */
+async function chooseTopic(value: string) {
+  await screen.findByRole('option', { name: 'Loops' });
+  fireEvent.change(topicSelect(), { target: { value } });
+}
 
 describe('QuestionForm (create)', () => {
   it('blocks saving an MCQ until it has text, filled options and one correct answer', async () => {
@@ -17,6 +23,10 @@ describe('QuestionForm (create)', () => {
     expect(await screen.findByText('Question text is required.')).toBeTruthy();
 
     fireEvent.change(screen.getByLabelText('Question'), { target: { value: 'Capital of France?' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create question' }));
+    expect(await screen.findByText('Choose a topic, or Uncategorised.')).toBeTruthy();
+
+    await chooseTopic('topic-loops');
     fireEvent.click(screen.getByRole('button', { name: 'Create question' }));
     expect(await screen.findByText('Add at least two options.')).toBeTruthy();
     expect(create).not.toHaveBeenCalled();
@@ -35,12 +45,14 @@ describe('QuestionForm (create)', () => {
     fireEvent.change(screen.getByLabelText('Add tag'), { target: { value: 'Geography' } });
     fireEvent.keyDown(screen.getByLabelText('Add tag'), { key: 'Enter' });
     fireEvent.change(screen.getByLabelText('Status'), { target: { value: QuestionStatus.DRAFT } });
+    await chooseTopic('topic-loops');
     fireEvent.click(screen.getByRole('button', { name: 'Create question' }));
 
     await waitFor(() => expect(onSaved).toHaveBeenCalled());
     expect(create).toHaveBeenCalledWith(
       expect.objectContaining({
         text: 'Capital of France?',
+        topicId: 'topic-loops',
         type: QuestionType.MCQ_SINGLE,
         status: QuestionStatus.DRAFT,
         tags: ['geography'],
@@ -67,10 +79,12 @@ describe('QuestionForm (create)', () => {
     fireEvent.change(screen.getByLabelText('Test 2 input'), { target: { value: 'hello' } });
     fireEvent.change(screen.getByLabelText('Test 2 expected output'), { target: { value: 'olleh' } });
     fireEvent.change(await screen.findByLabelText('Reference solution'), { target: { value: 'print(input()[::-1])' } });
+    await chooseTopic(NO_TOPIC);
     fireEvent.click(screen.getByRole('button', { name: 'Create question' }));
 
     await waitFor(() => expect(create).toHaveBeenCalled());
     const body = create.mock.calls[0][0];
+    expect(body.topicId).toBeNull(); // "Uncategorised"
     expect(body.options).toBeUndefined();
     expect(body.coding).toMatchObject({
       statementMd: 'Print the input reversed.',
@@ -83,7 +97,66 @@ describe('QuestionForm (create)', () => {
   });
 });
 
+describe('QuestionForm (coding languages, #16)', () => {
+  it('saves the allowed languages and the reference solution language', async () => {
+    const api = createFakeApi();
+    const create = vi.spyOn(api, 'createBankQuestion');
+    renderWithApi(<QuestionForm onSaved={vi.fn()} onCancel={vi.fn()} />, api);
+
+    fireEvent.change(typeSelect(), { target: { value: QuestionType.CODING } });
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Sum' } });
+    fireEvent.change(screen.getByLabelText('Problem statement'), { target: { value: 'Add two numbers.' } });
+    fireEvent.change(screen.getByLabelText('Test 1 input'), { target: { value: '1 2' } });
+    fireEvent.change(screen.getByLabelText('Test 1 expected output'), { target: { value: '3' } });
+    // Every language is allowed by default; untick C and Python: students get C++ and Java only.
+    fireEvent.click(screen.getByLabelText(CODE_LANGUAGES[CodeLanguage.C].label));
+    fireEvent.click(screen.getByLabelText('Python 3.12'));
+    fireEvent.click(screen.getByRole('tab', { name: 'Java' }));
+    fireEvent.change(await screen.findByLabelText('Starter code (Java)'), { target: { value: 'public class Main {}' } });
+    fireEvent.change(screen.getByLabelText('Reference solution language'), { target: { value: CodeLanguage.CPP } });
+    fireEvent.change(screen.getByLabelText('Reference solution'), { target: { value: 'int main(){}' } });
+    await chooseTopic(NO_TOPIC);
+    fireEvent.click(screen.getByRole('button', { name: 'Create question' }));
+
+    await waitFor(() => expect(create).toHaveBeenCalled());
+    expect(create.mock.calls[0][0].coding).toMatchObject({
+      allowedLanguages: [CodeLanguage.CPP, CodeLanguage.JAVA],
+      referenceLanguage: CodeLanguage.CPP,
+      referenceSolution: 'int main(){}',
+      starterCode: expect.objectContaining({ [CodeLanguage.JAVA]: 'public class Main {}' }),
+    });
+  });
+
+  it('allows every language by default', () => {
+    renderWithApi(<QuestionForm onSaved={vi.fn()} onCancel={vi.fn()} />, createFakeApi());
+    fireEvent.change(typeSelect(), { target: { value: QuestionType.CODING } });
+    for (const l of CODE_LANGUAGE_ORDER) {
+      expect((screen.getByLabelText(CODE_LANGUAGES[l].label) as HTMLInputElement).checked).toBe(true);
+    }
+  });
+
+  it('keeps at least one language', () => {
+    renderWithApi(<QuestionForm onSaved={vi.fn()} onCancel={vi.fn()} />, createFakeApi());
+    fireEvent.change(typeSelect(), { target: { value: QuestionType.CODING } });
+    for (const l of [CodeLanguage.C, CodeLanguage.CPP, CodeLanguage.JAVA]) fireEvent.click(screen.getByLabelText(CODE_LANGUAGES[l].label));
+    expect((screen.getByLabelText('Python 3.12') as HTMLInputElement).disabled).toBe(true);
+  });
+});
+
 describe('QuestionForm (edit)', () => {
+  it('shows an existing question without a topic as Uncategorised, and saves it that way', async () => {
+    const state = seedState();
+    const api = createFakeApi(state);
+    const replace = vi.spyOn(api, 'replaceBankQuestion');
+    const noTopic = state.questions.find((q) => !q.topicId)!;
+    renderWithApi(<QuestionForm questionId={noTopic.id} onSaved={vi.fn()} onCancel={vi.fn()} />, api);
+
+    await screen.findByLabelText('Question');
+    expect(topicSelect().value).toBe(NO_TOPIC);
+    fireEvent.click(screen.getByRole('button', { name: 'Save question' }));
+    await waitFor(() => expect(replace).toHaveBeenCalledWith(noTopic.id, expect.objectContaining({ topicId: null })));
+  });
+
   it('replaces an unlocked question with PUT', async () => {
     const state = seedState();
     const api = createFakeApi(state);

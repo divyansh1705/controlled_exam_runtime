@@ -5,7 +5,7 @@
  * Refreshes every 30 s while the exam is ACTIVE.
  */
 import { Fragment, useMemo, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { QuestionType, type AnalyticsCell, type QuestionAnalyticsMatrix, type QuestionStats } from '@secure-exam/types';
 import { errorMessage, useExamContentApi } from '../api/ExamContentApi';
 import { TYPE_LABEL } from '../question-bank/labels';
@@ -209,7 +209,12 @@ function Matrix({ m, onOpen }: { m: QuestionAnalyticsMatrix; onOpen: (attemptId:
                         aria-label={`${s.fullName}, Q${q.number}: ${cellTitle(c)}`}
                         className={cx('relative inline-flex h-7 w-9 items-center justify-center rounded text-xs font-semibold', style.className)}
                       >
-                        {c.state === 'PARTIAL' ? c.score : style.symbol}
+                        {c.state === 'PARTIAL' || c.adjustment ? c.score : style.symbol}
+                        {c.adjustment && (
+                          <span aria-hidden className="absolute -top-1 -right-1 text-[10px] leading-none text-foreground">
+                            ±
+                          </span>
+                        )}
                         {c.markedForReview && (
                           <span className="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-violet-500" />
                         )}
@@ -235,7 +240,6 @@ function gradingPending(m: QuestionAnalyticsMatrix): number {
 
 export function QuestionsTab({ examId }: { examId: string }) {
   const api = useExamContentApi();
-  const qc = useQueryClient();
   const [openAttempt, setOpenAttempt] = useState<string | null>(null);
   const q = useQuery({
     queryKey: ['question-analytics', examId],
@@ -245,10 +249,6 @@ export function QuestionsTab({ examId }: { examId: string }) {
       query.state.data && (query.state.data.exam.status === 'ACTIVE' || gradingPending(query.state.data) > 0)
         ? 10_000
         : false,
-  });
-  const recalc = useMutation({
-    mutationFn: () => api.recalculateResults(examId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['question-analytics', examId] }),
   });
 
   if (q.isLoading) {
@@ -280,16 +280,6 @@ export function QuestionsTab({ examId }: { examId: string }) {
   };
 
   const pending = gradingPending(m);
-  const confirmRecalc = () => {
-    if (
-      window.confirm(
-        'Recalculate every finished attempt with the current questions (marks, correct answers, tests)? ' +
-          'This replaces any score you adjusted by hand.',
-      )
-    ) {
-      recalc.mutate();
-    }
-  };
 
   return (
     <div className="space-y-6">
@@ -299,9 +289,6 @@ export function QuestionsTab({ examId }: { examId: string }) {
           {m.exam.status === 'ACTIVE' && ' · live'}
         </p>
         <div className="flex gap-2">
-          <Button size="sm" onClick={confirmRecalc} busy={recalc.isPending} disabled={m.students.length === 0}>
-            Recalculate results
-          </Button>
           <Button size="sm" onClick={exportCsv} disabled={m.students.length === 0}>
             Export CSV
           </Button>
@@ -311,13 +298,6 @@ export function QuestionsTab({ examId }: { examId: string }) {
         <Alert tone="blue">
           Grading in progress: {pending} coding answer{pending === 1 ? '' : 's'} from finished attempts still to grade.
           This page updates on its own.
-        </Alert>
-      )}
-      {recalc.isError && <Alert>{errorMessage(recalc.error)}</Alert>}
-      {recalc.data && (
-        <Alert tone="green">
-          Recalculated {recalc.data.recalculatedNow} of {recalc.data.attempts} results
-          {recalc.data.queuedToRerun > 0 && `; ${recalc.data.queuedToRerun} coding answers are being graded again`}.
         </Alert>
       )}
 
