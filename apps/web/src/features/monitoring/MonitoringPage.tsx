@@ -3,7 +3,7 @@
  * Polls GET /attempts every 10 s; time left ticks locally between polls.
  */
 
-import { getExams, listAttempts } from '@secure-exam/api-client';
+import { approveDeviceChange, getExams, listAttempts } from '@secure-exam/api-client';
 import { AttemptStatus, ExamStatus } from '@secure-exam/types';
 import type { AttemptMonitorView } from '@secure-exam/types';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -19,6 +19,7 @@ import { Select } from '@/components/ui/select';
 import { TableSkeleton } from '@/components/ui/skeleton';
 import { StatCard } from '@/components/ui/stat-card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { toast } from '@/components/ui/toast';
 import { getErrorMessage } from '@/lib/errors';
 import { formatDuration, formatRelative } from '@/lib/format';
 import { cn } from '@/lib/utils';
@@ -32,6 +33,7 @@ export default function MonitoringPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const examId = searchParams.get('examId') ?? '';
   const status = (searchParams.get('status') ?? '') as AttemptStatus | '';
+  const [approving, setApproving] = useState<string | null>(null);
   const [target, setTarget] = useState<ExtendTarget | null>(null);
   const now = useNow(1000);
 
@@ -151,6 +153,21 @@ export default function MonitoringPage() {
               <AttemptRow
                 key={a.id}
                 attempt={a}
+                approving={approving === a.id}
+                onApprove={async () => {
+                  setApproving(a.id);
+                  try {
+                    await approveDeviceChange(a.id);
+                    toast.success(
+                      a.timerPausedAt
+                        ? 'Device change approved. The timer stays paused until the student continues in the exam app.'
+                        : 'Device change approved. The timer keeps running (the exam was interrupted with Ctrl+Alt+Delete). Ask the student to retry in the exam app.',
+                    );
+                    await attempts.refetch();
+                  }
+                  catch (error) { toast.error(getErrorMessage(error)); }
+                  finally { setApproving(null); }
+                }}
                 showExam={!examId}
                 elapsedSinceFetch={Math.max(0, Math.floor((now - fetchedAt) / 1000))}
                 now={now}
@@ -189,20 +206,24 @@ function AttemptRow({
   showExam,
   elapsedSinceFetch,
   now,
-  onExtend,
+  onExtend, onApprove, approving,
 }: {
   attempt: AttemptMonitorView;
   showExam: boolean;
   elapsedSinceFetch: number;
   now: number;
   onExtend: () => void;
+  onApprove: () => Promise<void>;
+  approving: boolean;
 }) {
   const running = a.status === AttemptStatus.IN_PROGRESS;
-  const remaining = running ? Math.max(0, a.remainingSeconds - elapsedSinceFetch) : null;
+  // A paused timer (approved device change in progress) doesn't count down.
+  const remaining = running ? Math.max(0, a.remainingSeconds - (a.timerPausedAt ? 0 : elapsedSinceFetch)) : null;
 
   return (
     <TableRow className={cn(running && a.isDisconnected && 'bg-destructive/5')}>
       <TableCell>
+        {running && a.deviceChangeRequestedAt && <div className="mb-2"><Button size="sm" variant="outline" loading={approving} disabled={a.deviceChangeApproved || a.isOverdue} onClick={() => void onApprove()}>{a.deviceChangeApproved ? 'Device change approved' : 'Allow device change'}</Button></div>}
         <p className="font-medium">{a.studentName ?? 'Unknown student'}</p>
         <p className="font-mono text-xs text-muted-foreground">{a.collegeId ?? a.studentId.slice(0, 8)}</p>
       </TableCell>
@@ -220,6 +241,11 @@ function AttemptRow({
       </TableCell>
       <TableCell className="text-right tabular-nums">
         {remaining === null ? '—' : remaining === 0 ? 'Time up' : formatDuration(remaining)}
+        {running && a.timerPausedAt && (
+          <p className="text-xs text-muted-foreground" title="Paused for a device change; it continues when the student is back in the exam.">
+            Timer paused for {formatDuration((now - new Date(a.timerPausedAt).getTime()) / 1000)}
+          </p>
+        )}
         {!!a.extendedMinutes && <p className="text-xs text-muted-foreground">+{a.extendedMinutes} min extended</p>}
       </TableCell>
       <TableCell className="text-muted-foreground">{a.lastSeenAt ? formatRelative(a.lastSeenAt, now) : 'Never'}</TableCell>

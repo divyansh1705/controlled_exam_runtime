@@ -1,16 +1,23 @@
 // Owner: Person A
-// Sidebar shell for every admin screen. Navigation comes from the nav registry.
+// Sidebar shell for every instructor and TA screen. Navigation comes from the
+// nav registry, filtered by what the user may do on their courses.
 
 import { GraduationCap, LogOut, Menu, X } from 'lucide-react';
 import { useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { adminNav } from '@/app/registry/nav';
+import { staffNav } from '@/app/registry/nav';
 import { useAuth } from '@/auth/AuthContext';
+import { useAccess } from '@/auth/useAccess';
 import { Button } from '@/components/ui/button';
+import { roleLabel } from '@/lib/format';
 import { cn } from '@/lib/utils';
 
-export function AdminLayout() {
+export function StaffLayout() {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const { can, isInstructor, isLoading } = useAccess();
+  // An instructor always sees everything (their lists may simply be empty);
+  // a TA sees only what they were granted somewhere.
+  const nav = staffNav.filter((item) => !item.permission || isInstructor || isLoading || can(item.permission));
 
   return (
     <div className="min-h-screen bg-background lg:flex">
@@ -39,8 +46,8 @@ export function AdminLayout() {
           <div className="hidden px-2 lg:block">
             <Brand />
           </div>
-          <nav className="mt-2 flex flex-col gap-1 lg:mt-8" aria-label="Admin">
-            {adminNav.map((item) => (
+          <nav className="mt-2 flex flex-col gap-1 lg:mt-8" aria-label="Staff">
+            {nav.map((item) => (
               <NavLink
                 key={item.to}
                 to={item.to}
@@ -85,7 +92,9 @@ function UserBlock() {
   return (
     <div className="mt-6 border-t border-sidebar-foreground/15 pt-4">
       <p className="truncate text-sm">{user?.fullName}</p>
-      <p className="truncate text-xs text-sidebar-foreground/60">{user?.email}</p>
+      <p className="truncate text-xs text-sidebar-foreground/60">
+        {roleLabel(user?.role)} · {user?.email}
+      </p>
       <button
         type="button"
         onClick={async () => {
