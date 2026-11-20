@@ -23,7 +23,6 @@ import { NotificationService } from '../notification/notification.service';
 import { QuestionService } from '../question/question.service';
 import { StudentEntity } from '../user/entities/student.entity';
 import { UserService } from '../user/user.service';
-import { McqGradingService } from './mcq-grading.service';
 import {
   mean,
   median,
@@ -52,14 +51,14 @@ export class ResultsService {
     private readonly registrationService: RegistrationService,
     private readonly userService: UserService,
     private readonly notificationService: NotificationService,
-    private readonly mcqGrading: McqGradingService,
     private readonly auditService: AuditService,
     private readonly clientSecurity: ClientSecurityService,
   ) {}
 
-  /** Exam picker on the results page: every exam, newest first, with headline numbers. */
-  async listExams(): Promise<ExamResultsSummary[]> {
-    const exams = await this.examRepo.find({ order: { startTime: 'DESC' } });
+  /** Exam picker on the results page: the exams of `courseIds`, newest first, with headline numbers. */
+  async listExams(courseIds: string[]): Promise<ExamResultsSummary[]> {
+    if (courseIds.length === 0) return [];
+    const exams = await this.examRepo.find({ where: { courseId: In(courseIds) }, order: { startTime: 'DESC' } });
     if (exams.length === 0) return [];
 
     const registered = await this.registrationService.countsByExam(exams.map((e) => e.id));
@@ -72,7 +71,9 @@ export class ResultsService {
                          THEN 100.0 ELSE 0 END) AS "passRate"
            FROM results r
            JOIN exams e ON e.id = r."examId"
+          WHERE r."examId" = ANY($1::uuid[])
           GROUP BY r."examId"`,
+        [exams.map((e) => e.id)],
       );
     const aggBy = new Map(aggregates.map((a) => [a.examId, a]));
 
@@ -88,7 +89,7 @@ export class ResultsService {
         registeredCount: registered.get(exam.id) ?? 0,
         submittedCount: agg ? Number(agg.submitted) : 0,
         averagePercentage: agg?.avgPct != null ? round2(Number(agg.avgPct)) : null,
-        passRate: agg?.passRate != null ? round2(Number(agg.passRate)) : null,
+        passRate: exam.passMarkEnabled && agg?.passRate != null ? round2(Number(agg.passRate)) : null,
       };
     });
   }
@@ -103,7 +104,7 @@ export class ResultsService {
       const r = resultByAttempt.get(a.id)!;
       return percentage(r.score, r.maxScore || maxScore);
     });
-    const passedCount = percentages.filter((p) => p >= exam.passPercentage).length;
+    const passedCount = exam.passMarkEnabled ? percentages.filter((p) => p >= exam.passPercentage).length : 0;
     const durations = finalized
       .filter((a) => a.submittedAt)
       .map((a) => (a.submittedAt!.getTime() - a.startedAt.getTime()) / 1000);
@@ -116,6 +117,7 @@ export class ResultsService {
       title: exam.title,
       maxScore,
       passPercentage: exam.passPercentage,
+      passMarkEnabled: exam.passMarkEnabled,
       registeredCount: registeredUserIds.size,
       startedCount: attempts.length,
       submittedCount: finalized.length,
@@ -126,7 +128,7 @@ export class ResultsService {
       min: scores.length ? round2(Math.min(...scores)) : null,
       max: scores.length ? round2(Math.max(...scores)) : null,
       standardDeviation: roundOrNull(standardDeviation(scores)),
-      passRate: percentages.length ? round2((passedCount / percentages.length) * 100) : null,
+      passRate: exam.passMarkEnabled && percentages.length ? round2((passedCount / percentages.length) * 100) : null,
       passedCount,
       histogram: percentageHistogram(percentages),
       averageTimeSeconds: durations.length ? Math.round(mean(durations)!) : null,
@@ -170,7 +172,7 @@ export class ResultsService {
         score: result ? round2(result.score) : null,
         maxScore: rowMax,
         percentage: pct,
-        passed: pct === null ? null : pct >= exam.passPercentage,
+        passed: pct === null || !exam.passMarkEnabled ? null : pct >= exam.passPercentage,
         timeTakenSeconds: timeTaken,
         startedAt: attempt ? attempt.startedAt.toISOString() : null,
         submittedAt: attempt?.submittedAt ? attempt.submittedAt.toISOString() : null,
@@ -199,7 +201,7 @@ export class ResultsService {
           (a.collegeId ?? '').localeCompare(b.collegeId ?? ''),
       );
 
-    return { examId, maxScore, passPercentage: exam.passPercentage, items };
+    return { examId, maxScore, passPercentage: exam.passPercentage, passMarkEnabled: exam.passMarkEnabled, items };
   }
 
   /** Publishes every unpublished result of the exam and notifies those students. */
@@ -225,28 +227,6 @@ export class ResultsService {
     }
     await this.auditService.logEvent(AuditEventType.RESULT_PUBLISHED, { examId, publishedCount: userIds.length }, actorId);
     return { publishedCount: userIds.length };
-  }
-
-  /** Re-runs MCQ grading for every finalized attempt (e.g. after an answer-key fix). */
-  async recompute(examId: string, actorId: string): Promise<{ attemptsGraded: number; failed: number }> {
-    await this.examService.findOne(examId);
-    const attempts = await this.attemptRepo.find({
-      where: { examId, status: In([...FINALIZED]) },
-      select: ['id'],
-    });
-    let attemptsGraded = 0;
-    let failed = 0;
-    for (const attempt of attempts) {
-      try {
-        await this.mcqGrading.gradeAttempt(attempt.id);
-        attemptsGraded++;
-      } catch (err) {
-        failed++;
-        this.logger.error(`Recompute failed for attempt ${attempt.id}`, err instanceof Error ? err.stack : undefined);
-      }
-    }
-    await this.auditService.logEvent(AuditEventType.RESULTS_RECOMPUTED, { examId, attemptsGraded, failed }, actorId);
-    return { attemptsGraded, failed };
   }
 
   private async loadExamData(examId: string) {
