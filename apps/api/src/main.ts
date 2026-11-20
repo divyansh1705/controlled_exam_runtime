@@ -13,6 +13,8 @@ async function bootstrap() {
   const configService = app.get(ConfigService);
 
   app.use(helmet());
+  const proxyHops = configService.get<number>('TRUST_PROXY_HOPS') ?? 0;
+  if (proxyHops > 0) app.getHttpAdapter().getInstance().set('trust proxy', proxyHops);
 
   const corsOrigin = configService.get<string>('CORS_ORIGIN');
   const allowedOrigins = corsOrigin
@@ -47,9 +49,11 @@ async function bootstrap() {
   SwaggerModule.setup('api/docs', app, document);
 
   const port = configService.get<number>('PORT') ?? 3000;
-  await app.listen(port);
+  const host = configService.get<string>('HOST');
+  if (host) await app.listen(port, host);
+  else await app.listen(port);
   // eslint-disable-next-line no-console
-  console.log(`API listening on http://localhost:${port}`);
+  console.log(`API listening on http://${host ?? 'localhost'}:${port}`);
   // eslint-disable-next-line no-console
   console.log(`Swagger docs at http://localhost:${port}/api/docs`);
 }
