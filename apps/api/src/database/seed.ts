@@ -1,12 +1,19 @@
 /**
- * Dev Seed Script — creates an admin user, 3 test students, a course they are
- * enrolled in, and an active, published exam registered to that course.
+ * Dev Seed Script — creates instructors (there is no admin), a TA, the demo
+ * college's student list (40 students; 3 of them enrolled in the courses), a
+ * course those 3 are enrolled in, and an active, published exam owned by that
+ * course. A second instructor gets their own course and draft
+ * exam, so you can check that instructors only see their own courses. Every
+ * instructor ends up with two courses, each with its own question bank
+ * (seed-data/course-banks.ts).
  *
  * Run once after migrations:
  *   npm run db:seed --workspace=apps/api
  *
  * Idempotent: skips rows that already exist.
  * NEVER run in production — this is a development-only convenience tool.
+ * (Production instructors: `npm run db:seed-instructors -- instructors.json`;
+ * the college's students: `npm run db:seed-students -- students.json`.)
  */
 
 import 'dotenv/config';
@@ -21,43 +28,53 @@ import {
   MERGE_INTERVALS_STATEMENT,
   MERGE_INTERVALS_TEST_CASES,
   MERGE_INTERVALS_TITLE,
+  SeedTestCase,
 } from './seed-data/merge-intervals';
+import {
+  LAST_ELEMENT_MARKS,
+  LAST_ELEMENT_REFERENCE,
+  LAST_ELEMENT_STARTER,
+  LAST_ELEMENT_STATEMENT,
+  LAST_ELEMENT_TEST_CASES,
+  LAST_ELEMENT_TITLE,
+} from './seed-data/last-element';
 import { EASY_CODING_QUESTIONS, EASY_CODING_TAGS, EASY_CODING_TOPIC } from './seed-data/easy-coding';
+import { EASY_MCQ_QUESTIONS, EASY_MCQ_TAGS, EASY_MCQ_TOPIC } from './seed-data/easy-mcq';
+import { DEFAULT_INSTRUCTORS, upsertInstructors } from './seed-data/instructors';
+import { COURSE_BANKS } from './seed-data/course-banks';
+import { DEMO_STUDENT_PASSWORD, DEMO_STUDENTS, ENROLLED_DEMO_STUDENTS, upsertStudents } from './seed-data/students';
+import { backfillOwnership, convertAdminRoleToInstructor } from './phase5-ownership';
 
 // ── Seed data ──────────────────────────────────────────────────────────────
 
-const ADMIN = {
-  email: 'admin@secure-exam.dev',
-  fullName: 'Admin User',
-  password: 'Admin@1234',
-  role: 'admin' as const,
+/** Owns CS201 and the sample exam. */
+const INSTRUCTOR = DEFAULT_INSTRUCTORS[0];
+/** Owns CS301 and its draft exam; can't see CS201. */
+const OTHER_INSTRUCTOR = DEFAULT_INSTRUCTORS[1];
+
+/** A TA on CS201 with the default permissions (view exams, monitor, view results). */
+const TA = {
+  email: 'ta@secure-exam.dev',
+  fullName: 'Tara Assistant',
+  password: 'Assistant@1234',
+  permissions: ['EXAM_VIEW', 'MONITOR', 'RESULTS_VIEW'],
 };
 
-const STUDENTS = [
-  {
-    collegeId: 'CS2024001',
-    fullName: 'Alice Johnson',
-    email: 'alice@secure-exam.dev',
-    password: 'Student@1234',
-  },
-  {
-    collegeId: 'CS2024002',
-    fullName: 'Bob Smith',
-    email: 'bob@secure-exam.dev',
-    password: 'Student@1234',
-  },
-  {
-    collegeId: 'CS2024003',
-    fullName: 'Carol Williams',
-    email: 'carol@secure-exam.dev',
-    password: 'Student@1234',
-  },
-];
+/** The pre-Phase 5 development admin, deactivated by this seed if it exists. */
+const LEGACY_ADMIN_EMAIL = 'admin@secure-exam.dev';
+
+// Students: the demo college's student list (seed-data/students.ts). Only
+// ENROLLED_DEMO_STUDENTS are put in the sample courses; the rest are on the
+// college list for instructors to enrol.
 
 // Must be a v4 UUID: StartAttemptDto rejects any other version.
 const SAMPLE_EXAM_ID = '11111111-1111-4111-8111-111111111111';
 
 const SAMPLE_COURSE = { code: 'CS201', name: 'Operating Systems & Networks' };
+
+// The second instructor's course and draft exam.
+const OTHER_COURSE = { code: 'CS301', name: 'Design & Analysis of Algorithms' };
+const OTHER_EXAM_ID = '22222222-2222-4222-8222-222222222222';
 
 const BCRYPT_ROUNDS = 10;
 
@@ -67,12 +84,27 @@ const BCRYPT_ROUNDS = 10;
 // the entities don't exactly match the migrations. Sync the schema the same way
 // before inserting, so the tables the seed writes to (including Phase 4's
 // courses and exam_registrations) exist with the shape the API expects.
-const ds = new DataSource({
+const connection = {
   ...(cliDataSource.options as PostgresConnectionOptions),
   url: process.env.DATABASE_URL ?? 'postgres://exam_user:exam_pass@localhost:5432/secure_exam',
   migrations: [],
-  synchronize: process.env.NODE_ENV !== 'production',
-});
+};
+const ds = new DataSource({ ...connection, synchronize: process.env.NODE_ENV !== 'production' });
+
+/**
+ * synchronize can't turn the old `admin` users into `instructor`s (it would
+ * fail on the existing rows), so do that first, on a connection that doesn't
+ * synchronize. Same SQL as the Phase 5 migration; a no-op once done.
+ */
+async function convertLegacyRoles() {
+  const plain = new DataSource({ ...connection, synchronize: false });
+  await plain.initialize();
+  try {
+    if (await convertAdminRoleToInstructor(plain)) console.log('🔁 Converted admin accounts to instructors\n');
+  } finally {
+    await plain.destroy();
+  }
+}
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -81,7 +113,7 @@ async function upsertUser(
   email: string,
   fullName: string,
   password: string,
-  role: 'admin' | 'student',
+  role: 'ta',
 ): Promise<{ id: string; created: boolean }> {
   const existing = await ds.query<{ id: string }[]>(
     `SELECT id FROM users WHERE email = $1 LIMIT 1`,
@@ -109,58 +141,79 @@ async function upsertUser(
   return { id: row.id, created: true };
 }
 
-async function upsertStudent(
+/** A course taught by `instructorId` (plus optional TAs), with these students enrolled. */
+async function seedCourse(
   ds: DataSource,
-  userId: string,
-  collegeId: string,
-): Promise<{ id: string; created: boolean }> {
-  const existing = await ds.query<{ id: string }[]>(
-    `SELECT id FROM students WHERE "collegeId" = $1 LIMIT 1`,
-    [collegeId],
-  );
-
-  if (existing.length > 0) {
-    return { id: existing[0].id, created: false };
-  }
-
+  course: { code: string; name: string },
+  instructorId: string,
+  studentIds: string[],
+  tas: { userId: string; permissions: string[] }[] = [],
+): Promise<string> {
   const [row] = await ds.query<{ id: string }[]>(
-    `INSERT INTO students ("userId", "collegeId") VALUES ($1, $2) RETURNING id`,
-    [userId, collegeId],
-  );
-
-  return { id: row.id, created: true };
-}
-
-/** A course with every seeded student enrolled, assigned to the sample exam (Phase 4). */
-async function seedCourse(ds: DataSource, studentIds: string[]) {
-  console.log('\n🏫 Seeding course…');
-  const [course] = await ds.query<{ id: string }[]>(
     `INSERT INTO courses ("code", "name") VALUES ($1, $2)
      ON CONFLICT ("code") DO UPDATE SET "name" = EXCLUDED."name"
      RETURNING id`,
-    [SAMPLE_COURSE.code, SAMPLE_COURSE.name],
+    [course.code, course.name],
   );
+  await ds.query(
+    `INSERT INTO course_staff ("courseId", "userId", "role", "permissions")
+     VALUES ($1, $2, 'INSTRUCTOR', '[]'::jsonb)
+     ON CONFLICT ("courseId", "userId") DO UPDATE SET "role" = 'INSTRUCTOR'`,
+    [row.id, instructorId],
+  );
+  for (const ta of tas) {
+    await ds.query(
+      `INSERT INTO course_staff ("courseId", "userId", "role", "permissions", "addedBy")
+       VALUES ($1, $2, 'TA', $3::jsonb, $4)
+       ON CONFLICT ("courseId", "userId") DO NOTHING`,
+      [row.id, ta.userId, JSON.stringify(ta.permissions), instructorId],
+    );
+  }
   for (const studentId of studentIds) {
     await ds.query(
       `INSERT INTO course_enrollments ("courseId", "studentId") VALUES ($1, $2) ON CONFLICT DO NOTHING`,
-      [course.id, studentId],
+      [row.id, studentId],
     );
   }
+  const staff = tas.length ? ` and ${tas.length} TA` : '';
+  console.log(`   ✅ ${course.code}: 1 instructor${staff}, ${studentIds.length} students`);
+  return row.id;
+}
+
+/** The exam belongs to the course, and every enrolled student is registered for it. */
+async function assignExamToCourse(ds: DataSource, examId: string, courseId: string, studentIds: string[]) {
+  await ds.query(`UPDATE exams SET "course_id" = $1 WHERE id = $2`, [courseId, examId]);
   await ds.query(
     `INSERT INTO exam_courses ("examId", "courseId") VALUES ($1, $2) ON CONFLICT DO NOTHING`,
-    [SAMPLE_EXAM_ID, course.id],
+    [examId, courseId],
   );
   for (const studentId of studentIds) {
     await ds.query(
       `INSERT INTO exam_registrations ("examId", "studentId", "source", "courseId")
        VALUES ($1, $2, 'COURSE', $3) ON CONFLICT DO NOTHING`,
-      [SAMPLE_EXAM_ID, studentId, course.id],
+      [examId, studentId, courseId],
     );
   }
-  console.log(`   ✅ ${SAMPLE_COURSE.code} with ${studentIds.length} students, assigned to the sample exam`);
 }
 
-async function seedActiveExam(ds: DataSource) {
+/** The second instructor's draft exam: unpublished, so students don't see it. */
+async function seedOtherInstructorExam(ds: DataSource, courseId: string) {
+  const startTime = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+  const endTime = new Date(startTime.getTime() + 2 * 60 * 60 * 1000);
+  await ds.query(
+    `INSERT INTO exams ("id", "title", "description", "duration_minutes", "start_time", "end_time", "status", "pass_percentage", "course_id")
+     VALUES ($1, $2, $3, 45, $4, $5, 'DRAFT', 40, $6)
+     ON CONFLICT ("id") DO UPDATE SET "course_id" = EXCLUDED."course_id"`,
+    [OTHER_EXAM_ID, 'Algorithms Quiz 1', 'Greedy algorithms and divide and conquer.', startTime, endTime, courseId],
+  );
+  await ds.query(`INSERT INTO exam_courses ("examId", "courseId") VALUES ($1, $2) ON CONFLICT DO NOTHING`, [
+    OTHER_EXAM_ID,
+    courseId,
+  ]);
+  console.log(`   ✅ ${OTHER_COURSE.code}: draft exam "Algorithms Quiz 1"`);
+}
+
+async function seedActiveExam(ds: DataSource, courseId: string, ownerId: string) {
   console.log('\n📝 Seeding active exam…');
 
   const existingExam = await ds.query<{ id: string }[]>(
@@ -174,8 +227,8 @@ async function seedActiveExam(ds: DataSource) {
 
   if (existingExam.length === 0) {
     await ds.query(
-      `INSERT INTO exams ("id", "title", "description", "duration_minutes", "start_time", "end_time", "status", "published_at", "pass_percentage")
-       VALUES ($1, $2, $3, $4, $5, $6, $7, now(), 40)`,
+      `INSERT INTO exams ("id", "title", "description", "duration_minutes", "start_time", "end_time", "status", "published_at", "pass_percentage", "course_id")
+       VALUES ($1, $2, $3, $4, $5, $6, $7, now(), 40, $8)`,
       [
         SAMPLE_EXAM_ID,
         'Midterm Evaluation - OS & Networking',
@@ -184,15 +237,17 @@ async function seedActiveExam(ds: DataSource) {
         startTime,
         endTime,
         'ACTIVE',
+        courseId,
       ],
     );
     console.log(`   ✅ Created active exam: ${SAMPLE_EXAM_ID}`);
   } else {
-    // Keep it active and within time window
+    // Keep it active and within time window (a fresh window, not a reschedule)
     await ds.query(
       `UPDATE exams SET "status" = 'ACTIVE', "start_time" = $1, "end_time" = $2,
-              "published_at" = COALESCE("published_at", now()) WHERE id = $3`,
-      [startTime, endTime, SAMPLE_EXAM_ID],
+              "published_at" = COALESCE("published_at", now()), "course_id" = $4,
+              "original_start_time" = NULL, "schedule_note" = NULL WHERE id = $3`,
+      [startTime, endTime, SAMPLE_EXAM_ID, courseId],
     );
     console.log(`   ✅ Refreshed active exam: ${SAMPLE_EXAM_ID}`);
   }
@@ -208,9 +263,10 @@ async function seedActiveExam(ds: DataSource) {
 
     // Q1: MCQ Single
     const [q1] = await ds.query<{ id: string }[]>(
-      `INSERT INTO questions ("text", "type", "marks", "negative_marks")
-       VALUES ('Which scheduling algorithm can lead to starvation if lower priority processes arrive continuously?', 'MCQ_SINGLE', 2.0, 0.5)
+      `INSERT INTO questions ("text", "type", "marks", "negative_marks", "owner_id")
+       VALUES ('Which scheduling algorithm can lead to starvation if lower priority processes arrive continuously?', 'MCQ_SINGLE', 2.0, 0.5, $1)
        RETURNING id`,
+      [ownerId],
     );
     await ds.query(
       `INSERT INTO options ("question_id", "text", "is_correct", "order") VALUES
@@ -227,9 +283,10 @@ async function seedActiveExam(ds: DataSource) {
 
     // Q2: MCQ Multi
     const [q2] = await ds.query<{ id: string }[]>(
-      `INSERT INTO questions ("text", "type", "marks", "negative_marks")
-       VALUES ('Select all protocols that operate at the Transport Layer of the OSI model:', 'MCQ_MULTI', 3.0, 1.0)
+      `INSERT INTO questions ("text", "type", "marks", "negative_marks", "owner_id")
+       VALUES ('Select all protocols that operate at the Transport Layer of the OSI model:', 'MCQ_MULTI', 3.0, 1.0, $1)
        RETURNING id`,
+      [ownerId],
     );
     await ds.query(
       `INSERT INTO options ("question_id", "text", "is_correct", "order") VALUES
@@ -246,9 +303,10 @@ async function seedActiveExam(ds: DataSource) {
 
     // Q3: True / False
     const [q3] = await ds.query<{ id: string }[]>(
-      `INSERT INTO questions ("text", "type", "marks", "negative_marks")
-       VALUES ('A deadlock can occur even if the mutual exclusion condition is not satisfied.', 'TRUE_FALSE', 1.0, 0.25)
+      `INSERT INTO questions ("text", "type", "marks", "negative_marks", "owner_id")
+       VALUES ('A deadlock can occur even if the mutual exclusion condition is not satisfied.', 'TRUE_FALSE', 1.0, 0.25, $1)
        RETURNING id`,
+      [ownerId],
     );
     await ds.query(
       `INSERT INTO options ("question_id", "text", "is_correct", "order") VALUES
@@ -263,9 +321,10 @@ async function seedActiveExam(ds: DataSource) {
 
     // Q4: MCQ Single
     const [q4] = await ds.query<{ id: string }[]>(
-      `INSERT INTO questions ("text", "type", "marks", "negative_marks")
-       VALUES ('What is the primary purpose of virtual memory in modern operating systems?', 'MCQ_SINGLE', 2.0, 0.5)
+      `INSERT INTO questions ("text", "type", "marks", "negative_marks", "owner_id")
+       VALUES ('What is the primary purpose of virtual memory in modern operating systems?', 'MCQ_SINGLE', 2.0, 0.5, $1)
        RETURNING id`,
+      [ownerId],
     );
     await ds.query(
       `INSERT INTO options ("question_id", "text", "is_correct", "order") VALUES
@@ -282,9 +341,10 @@ async function seedActiveExam(ds: DataSource) {
 
     // Q5: MCQ Multi
     const [q5] = await ds.query<{ id: string }[]>(
-      `INSERT INTO questions ("text", "type", "marks", "negative_marks")
-       VALUES ('Which of the following are valid private network IP address ranges (RFC 1918)?', 'MCQ_MULTI', 3.0, 0.5)
+      `INSERT INTO questions ("text", "type", "marks", "negative_marks", "owner_id")
+       VALUES ('Which of the following are valid private network IP address ranges (RFC 1918)?', 'MCQ_MULTI', 3.0, 0.5, $1)
        RETURNING id`,
+      [ownerId],
     );
     await ds.query(
       `INSERT INTO options ("question_id", "text", "is_correct", "order") VALUES
@@ -303,192 +363,68 @@ async function seedActiveExam(ds: DataSource) {
   }
 }
 
-// ── Question bank (not linked to any exam) ─────────────────────────────────
-// Easy DSA + Python questions for testing. Admins add them to an exam from the
-// exam's Questions tab. Matched by text, so re-running the seed never duplicates.
-
-type BankQuestion = {
-  text: string;
-  type: 'MCQ_SINGLE' | 'MCQ_MULTI' | 'TRUE_FALSE';
+interface SeedCodingProblem {
+  title: string;
   marks: number;
-  negativeMarks: number;
-  explanation: string;
-  /** [text, isCorrect] in display order. */
-  options: [string, boolean][];
-};
+  difficulty: 'EASY' | 'MEDIUM' | 'HARD';
+  statement: string;
+  starter: string;
+  reference: string;
+  testCases: SeedTestCase[];
+}
 
-const BANK_QUESTIONS: BankQuestion[] = [
-  // ---- Single choice ----
+const CODING_PROBLEMS: SeedCodingProblem[] = [
   {
-    text: 'Which data structure follows the Last-In, First-Out (LIFO) principle?',
-    type: 'MCQ_SINGLE', marks: 1, negativeMarks: 0.25,
-    explanation: 'A stack removes the most recently added item first.',
-    options: [['Queue', false], ['Stack', true], ['Linked list', false], ['Binary tree', false]],
+    title: LAST_ELEMENT_TITLE,
+    marks: LAST_ELEMENT_MARKS,
+    difficulty: 'EASY',
+    statement: LAST_ELEMENT_STATEMENT,
+    starter: LAST_ELEMENT_STARTER,
+    reference: LAST_ELEMENT_REFERENCE,
+    testCases: LAST_ELEMENT_TEST_CASES,
   },
   {
-    text: 'What is the time complexity of binary search on a sorted array of n elements?',
-    type: 'MCQ_SINGLE', marks: 1, negativeMarks: 0.25,
-    explanation: 'Each step halves the search range, giving O(log n).',
-    options: [['O(n)', false], ['O(log n)', true], ['O(n log n)', false], ['O(1)', false]],
-  },
-  {
-    text: 'In Python, what does len([10, 20, 30]) return?',
-    type: 'MCQ_SINGLE', marks: 1, negativeMarks: 0.25,
-    explanation: 'len() returns the number of items in the list: 3.',
-    options: [['2', false], ['3', true], ['30', false], ['60', false]],
-  },
-  {
-    text: 'In Python, what is the output of print(7 // 2)?',
-    type: 'MCQ_SINGLE', marks: 1, negativeMarks: 0.25,
-    explanation: '// is floor division, so 7 // 2 is 3.',
-    options: [['3.5', false], ['3', true], ['4', false], ['1', false]],
-  },
-  {
-    text: 'Which Python data type is used to store key-value pairs?',
-    type: 'MCQ_SINGLE', marks: 1, negativeMarks: 0.25,
-    explanation: 'A dict maps keys to values.',
-    options: [['list', false], ['tuple', false], ['dict', true], ['set', false]],
-  },
-  {
-    text: 'What is the index of the first element of a Python list?',
-    type: 'MCQ_SINGLE', marks: 1, negativeMarks: 0.25,
-    explanation: 'Python sequences are zero-indexed.',
-    options: [['0', true], ['1', false], ['-1', false], ['It depends on the list', false]],
-  },
-
-  // ---- Multiple choice ----
-  {
-    text: 'Which of the following are linear data structures?',
-    type: 'MCQ_MULTI', marks: 2, negativeMarks: 0.5,
-    explanation: 'Arrays, stacks and queues store elements in a sequence; a tree is hierarchical.',
-    options: [['Array', true], ['Stack', true], ['Queue', true], ['Binary tree', false]],
-  },
-  {
-    text: 'Which of the following Python types are mutable?',
-    type: 'MCQ_MULTI', marks: 2, negativeMarks: 0.5,
-    explanation: 'Lists and dicts can be changed in place; tuples and strings cannot.',
-    options: [['list', true], ['tuple', false], ['dict', true], ['str', false]],
-  },
-  {
-    text: 'Which of these sorting algorithms have an average time complexity of O(n log n)?',
-    type: 'MCQ_MULTI', marks: 2, negativeMarks: 0.5,
-    explanation: 'Merge sort and quick sort average O(n log n); bubble sort is O(n²).',
-    options: [['Merge sort', true], ['Bubble sort', false], ['Quick sort', true], ['Insertion sort', false]],
-  },
-  {
-    text: 'Which of the following are valid ways to create an empty list in Python?',
-    type: 'MCQ_MULTI', marks: 2, negativeMarks: 0.5,
-    explanation: '[] and list() both create an empty list; {} creates an empty dict.',
-    options: [['[]', true], ['list()', true], ['{}', false], ['()', false]],
-  },
-  {
-    text: 'Which operations does a queue support in its standard form?',
-    type: 'MCQ_MULTI', marks: 2, negativeMarks: 0.5,
-    explanation: 'A queue adds at the rear (enqueue) and removes from the front (dequeue).',
-    options: [['Enqueue at the rear', true], ['Dequeue from the front', true], ['Pop from the rear', false], ['Insert in the middle', false]],
-  },
-  {
-    text: 'Which of the following are Python keywords?',
-    type: 'MCQ_MULTI', marks: 2, negativeMarks: 0.5,
-    explanation: 'def, return and lambda are keywords; print is a built-in function.',
-    options: [['def', true], ['return', true], ['print', false], ['lambda', true]],
-  },
-
-  // ---- True / False ----
-  {
-    text: 'A queue follows the First-In, First-Out (FIFO) principle.',
-    type: 'TRUE_FALSE', marks: 1, negativeMarks: 0.25,
-    explanation: 'The first element added is the first removed.',
-    options: [['True', true], ['False', false]],
-  },
-  {
-    text: 'Binary search can be used on an unsorted array.',
-    type: 'TRUE_FALSE', marks: 1, negativeMarks: 0.25,
-    explanation: 'Binary search relies on the data being sorted.',
-    options: [['True', false], ['False', true]],
-  },
-  {
-    text: 'In Python, tuples are immutable.',
-    type: 'TRUE_FALSE', marks: 1, negativeMarks: 0.25,
-    explanation: "A tuple's elements cannot be reassigned after creation.",
-    options: [['True', true], ['False', false]],
-  },
-  {
-    text: 'Accessing an element of an array by its index takes O(n) time.',
-    type: 'TRUE_FALSE', marks: 1, negativeMarks: 0.25,
-    explanation: 'Index access in an array is O(1).',
-    options: [['True', false], ['False', true]],
-  },
-  {
-    text: 'In Python, indentation is used to define code blocks.',
-    type: 'TRUE_FALSE', marks: 1, negativeMarks: 0.25,
-    explanation: 'Python uses indentation instead of braces.',
-    options: [['True', true], ['False', false]],
-  },
-  {
-    text: 'A linked list stores its elements in contiguous memory locations.',
-    type: 'TRUE_FALSE', marks: 1, negativeMarks: 0.25,
-    explanation: 'Linked list nodes can be anywhere in memory; each points to the next.',
-    options: [['True', false], ['False', true]],
+    title: MERGE_INTERVALS_TITLE,
+    marks: MERGE_INTERVALS_MARKS,
+    difficulty: 'MEDIUM',
+    statement: MERGE_INTERVALS_STATEMENT,
+    starter: MERGE_INTERVALS_STARTER,
+    reference: MERGE_INTERVALS_REFERENCE,
+    testCases: MERGE_INTERVALS_TEST_CASES,
   },
 ];
 
-async function seedQuestionBank(ds: DataSource) {
-  console.log('\n📚 Seeding question bank…');
-  let created = 0;
-  for (const q of BANK_QUESTIONS) {
-    const existing = await ds.query<{ id: string }[]>(`SELECT id FROM questions WHERE "text" = $1 LIMIT 1`, [q.text]);
-    if (existing.length > 0) continue;
-
-    await ds.transaction(async (manager) => {
-      const [row] = await manager.query<{ id: string }[]>(
-        `INSERT INTO questions ("text", "type", "marks", "negative_marks", "explanation")
-         VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-        [q.text, q.type, q.marks, q.negativeMarks, q.explanation],
-      );
-      for (const [index, [text, isCorrect]] of q.options.entries()) {
-        await manager.query(
-          `INSERT INTO options ("question_id", "text", "is_correct", "order") VALUES ($1, $2, $3, $4)`,
-          [row.id, text, isCorrect, index],
-        );
-      }
-    });
-    created++;
-  }
-  const skipped = BANK_QUESTIONS.length - created;
-  console.log(`   ✅ ${created} question(s) added to the bank${skipped ? `, ${skipped} already present` : ''}`);
-}
-
 /**
- * A medium coding question (Merge Intervals) in the sample exam, so the code editor, the
- * runner and the grading can be tried. Separate from the MCQs above so that it is also
- * added to a database that already has them. Idempotent: skipped when the exam has a coding question.
+ * The coding questions (an easy Last Element and a medium Merge Intervals) in the sample exam,
+ * so the code editor, the runner and the grading can be tried. Separate from the MCQs above so
+ * that they are also added to a database that already has them. Idempotent: a question is
+ * skipped when the exam already has a coding question with its title.
  */
-async function seedCodingQuestion(ds: DataSource) {
+async function seedCodingQuestion(ds: DataSource, p: SeedCodingProblem, ownerId: string) {
   const existing = await ds.query<{ id: string }[]>(
     `SELECT q.id FROM questions q JOIN exam_questions eq ON eq."question_id" = q.id
-      WHERE eq."exam_id" = $1 AND q."type" = 'CODING' LIMIT 1`,
-    [SAMPLE_EXAM_ID],
+      WHERE eq."exam_id" = $1 AND q."type" = 'CODING' AND q."text" = $2 LIMIT 1`,
+    [SAMPLE_EXAM_ID, p.title],
   );
   if (existing.length > 0) {
-    console.log('   ⏭  Coding question already in the sample exam');
+    console.log(`   ⏭  "${p.title}" already in the sample exam`);
     return;
   }
 
-  console.log('   💻 Adding the coding question…');
+  console.log(`   💻 Adding "${p.title}"…`);
   const [question] = await ds.query<{ id: string }[]>(
-    `INSERT INTO questions ("text", "type", "marks", "negative_marks", "difficulty", "status")
-     VALUES ($1, 'CODING', $2, 0, 'MEDIUM', 'READY') RETURNING id`,
-    [MERGE_INTERVALS_TITLE, MERGE_INTERVALS_MARKS],
+    `INSERT INTO questions ("text", "type", "marks", "negative_marks", "difficulty", "status", "owner_id")
+     VALUES ($1, 'CODING', $2, 0, $3, 'READY', $4) RETURNING id`,
+    [p.title, p.marks, p.difficulty, ownerId],
   );
   await ds.query(
     `INSERT INTO coding_problems
        ("question_id", "statement_md", "starter_code", "allowed_languages", "time_limit_ms", "memory_limit_mb", "comparison_mode", "reference_solution")
-     VALUES ($1, $2, $3::jsonb, '{python}', 2000, 256, 'TRIM', $4)`,
-    [question.id, MERGE_INTERVALS_STATEMENT, JSON.stringify({ python: MERGE_INTERVALS_STARTER }), MERGE_INTERVALS_REFERENCE],
+     VALUES ($1, $2, $3::jsonb, $5, 2000, 256, 'TRIM', $4)`,
+    [question.id, p.statement, JSON.stringify({ python: p.starter }), p.reference, SEED_LANGUAGES],
   );
   let order = 0;
-  for (const t of MERGE_INTERVALS_TEST_CASES) {
+  for (const t of p.testCases) {
     await ds.query(
       `INSERT INTO coding_test_cases ("question_id", "input", "expected_output", "is_sample", "weight", "order")
        VALUES ($1, $2, $3, $4, $5, $6)`,
@@ -504,24 +440,27 @@ async function seedCodingQuestion(ds: DataSource) {
     question.id,
     next,
   ]);
-  console.log(`   ✅ "${MERGE_INTERVALS_TITLE}" (${MERGE_INTERVALS_MARKS} marks, ${MERGE_INTERVALS_TEST_CASES.length} test cases) added as question ${next}`);
+  console.log(`   ✅ "${p.title}" (${p.marks} marks, ${p.testCases.length} test cases) added as question ${next}`);
 }
 
 /**
- * Easy coding questions in the question bank, not linked to any exam, so an admin can
- * add them to an exam from the bank. Idempotent: a question is skipped when a coding
- * question with the same title already exists.
+ * Easy coding questions in the instructor's question bank, not linked to any exam, so
+ * they can add them to an exam from the bank. Idempotent: a question is skipped when a
+ * coding question with the same title already exists.
  */
-async function seedBankCodingQuestions(ds: DataSource) {
+async function seedBankCodingQuestions(ds: DataSource, ownerId: string) {
   console.log('\n📚 Seeding easy coding questions into the question bank…');
   let [topic] = await ds.query<{ id: string }[]>(
-    `SELECT id FROM topics WHERE "course_id" IS NULL AND "name" = $1 LIMIT 1`,
-    [EASY_CODING_TOPIC],
+    `SELECT id FROM topics WHERE "course_id" IS NULL AND "name" = $1 AND ("owner_id" = $2 OR "owner_id" IS NULL) LIMIT 1`,
+    [EASY_CODING_TOPIC, ownerId],
   );
   if (!topic) {
-    [topic] = await ds.query<{ id: string }[]>(`INSERT INTO topics ("name") VALUES ($1) RETURNING id`, [
+    [topic] = await ds.query<{ id: string }[]>(`INSERT INTO topics ("name", "owner_id") VALUES ($1, $2) RETURNING id`, [
       EASY_CODING_TOPIC,
+      ownerId,
     ]);
+  } else {
+    await ds.query(`UPDATE topics SET "owner_id" = $1 WHERE id = $2`, [ownerId, topic.id]);
   }
 
   for (const q of EASY_CODING_QUESTIONS) {
@@ -536,15 +475,15 @@ async function seedBankCodingQuestions(ds: DataSource) {
 
     await ds.transaction(async (tx) => {
       const [question] = await tx.query<{ id: string }[]>(
-        `INSERT INTO questions ("text", "type", "marks", "negative_marks", "difficulty", "status", "topic_id")
-         VALUES ($1, 'CODING', $2, 0, 'EASY', 'READY', $3) RETURNING id`,
-        [q.title, q.marks, topic.id],
+        `INSERT INTO questions ("text", "type", "marks", "negative_marks", "difficulty", "status", "topic_id", "owner_id")
+         VALUES ($1, 'CODING', $2, 0, 'EASY', 'READY', $3, $4) RETURNING id`,
+        [q.title, q.marks, topic.id, ownerId],
       );
       await tx.query(
         `INSERT INTO coding_problems
            ("question_id", "statement_md", "starter_code", "allowed_languages", "time_limit_ms", "memory_limit_mb", "comparison_mode", "reference_solution")
-         VALUES ($1, $2, $3::jsonb, '{python}', 2000, 256, 'TRIM', $4)`,
-        [question.id, q.statement, JSON.stringify({ python: q.starter }), q.reference],
+         VALUES ($1, $2, $3::jsonb, $5, 2000, 256, 'TRIM', $4)`,
+        [question.id, q.statement, JSON.stringify({ python: q.starter }), q.reference, SEED_LANGUAGES],
       );
       let order = 0;
       for (const t of q.testCases) {
@@ -562,61 +501,289 @@ async function seedBankCodingQuestions(ds: DataSource) {
   }
 }
 
+/**
+ * Easy objective questions (seed-data/easy-mcq.ts) in the instructor's question bank,
+ * not linked to any exam. Idempotent: a question is skipped when one with the same text
+ * is already in this instructor's bank (or has no owner yet; backfillOwnership gives
+ * it to the main instructor).
+ */
+async function seedBankObjectiveQuestions(ds: DataSource, ownerId: string) {
+  console.log('\n📚 Seeding easy objective questions into the question bank…');
+  let [topic] = await ds.query<{ id: string }[]>(
+    `SELECT id FROM topics WHERE "course_id" IS NULL AND "name" = $1 AND ("owner_id" = $2 OR "owner_id" IS NULL) LIMIT 1`,
+    [EASY_MCQ_TOPIC, ownerId],
+  );
+  if (!topic) {
+    [topic] = await ds.query<{ id: string }[]>(`INSERT INTO topics ("name", "owner_id") VALUES ($1, $2) RETURNING id`, [
+      EASY_MCQ_TOPIC,
+      ownerId,
+    ]);
+  } else {
+    await ds.query(`UPDATE topics SET "owner_id" = $1 WHERE id = $2`, [ownerId, topic.id]);
+  }
+
+  let created = 0;
+  for (const q of EASY_MCQ_QUESTIONS) {
+    const existing = await ds.query<{ id: string }[]>(
+      `SELECT id FROM questions WHERE "text" = $1 AND ("owner_id" = $2 OR "owner_id" IS NULL) LIMIT 1`,
+      [q.text, ownerId],
+    );
+    if (existing.length > 0) continue;
+
+    await ds.transaction(async (tx) => {
+      const [row] = await tx.query<{ id: string }[]>(
+        `INSERT INTO questions ("text", "type", "marks", "negative_marks", "explanation", "difficulty", "status", "topic_id", "owner_id")
+         VALUES ($1, $2, $3, $4, $5, 'EASY', 'READY', $6, $7) RETURNING id`,
+        [q.text, q.type, q.marks, q.negativeMarks, q.explanation, topic.id, ownerId],
+      );
+      for (const [index, [text, isCorrect]] of q.options.entries()) {
+        await tx.query(`INSERT INTO options ("question_id", "text", "is_correct", "order") VALUES ($1, $2, $3, $4)`, [
+          row.id,
+          text,
+          isCorrect,
+          index,
+        ]);
+      }
+      for (const tag of EASY_MCQ_TAGS) {
+        await tx.query(`INSERT INTO question_tags ("question_id", "tag") VALUES ($1, $2)`, [row.id, tag]);
+      }
+    });
+    created++;
+  }
+  const skipped = EASY_MCQ_QUESTIONS.length - created;
+  console.log(`   ✅ ${created} question(s) added to the bank${skipped ? `, ${skipped} already present` : ''}`);
+}
+
+/**
+ * Each instructor's two courses (seed-data/course-banks.ts) and a question bank per
+ * course: course topics, objective questions and coding questions, owned by the course's
+ * instructor and tagged with the course. Courses that already exist (CS201, CS301) are
+ * reused. Idempotent: a question is skipped when its instructor already has one with the
+ * same text.
+ */
+async function seedCourseBanks(ds: DataSource, instructorIds: Map<string, string>, studentIds: string[]) {
+  console.log('\n🏫 Seeding second courses and course question banks…');
+  for (const bank of COURSE_BANKS) {
+    const ownerId = instructorIds.get(bank.instructorEmail);
+    if (!ownerId) throw new Error(`Unknown instructor ${bank.instructorEmail} in course-banks.ts`);
+    const [existingCourse] = await ds.query<{ id: string }[]>(`SELECT id FROM courses WHERE "code" = $1`, [bank.course.code]);
+    const courseId = existingCourse?.id ?? (await seedCourse(ds, bank.course, ownerId, studentIds));
+
+    let added = 0;
+    let skipped = 0;
+    for (const topic of bank.topics) {
+      let [topicRow] = await ds.query<{ id: string }[]>(
+        `SELECT id FROM topics WHERE "course_id" = $1 AND "name" = $2 LIMIT 1`,
+        [courseId, topic.name],
+      );
+      if (!topicRow) {
+        [topicRow] = await ds.query<{ id: string }[]>(
+          `INSERT INTO topics ("name", "course_id", "owner_id") VALUES ($1, $2, $3) RETURNING id`,
+          [topic.name, courseId, ownerId],
+        );
+      }
+
+      const exists = async (text: string) =>
+        (await ds.query<{ id: string }[]>(`SELECT id FROM questions WHERE "text" = $1 AND "owner_id" = $2 LIMIT 1`, [text, ownerId]))
+          .length > 0;
+
+      for (const q of topic.questions) {
+        if (await exists(q.text)) {
+          skipped++;
+          continue;
+        }
+        await ds.transaction(async (tx) => {
+          const [row] = await tx.query<{ id: string }[]>(
+            `INSERT INTO questions ("text", "type", "marks", "negative_marks", "explanation", "difficulty", "status", "course_id", "topic_id", "owner_id")
+             VALUES ($1, $2, $3, $4, $5, $6, 'READY', $7, $8, $9) RETURNING id`,
+            [q.text, q.type, q.marks, q.negativeMarks, q.explanation, q.difficulty, courseId, topicRow.id, ownerId],
+          );
+          let order = 1;
+          for (const o of q.options) {
+            await tx.query(`INSERT INTO options ("question_id", "text", "is_correct", "order") VALUES ($1, $2, $3, $4)`, [
+              row.id,
+              o.text,
+              o.correct,
+              order++,
+            ]);
+          }
+        });
+        added++;
+      }
+
+      for (const c of topic.coding ?? []) {
+        if (await exists(c.title)) {
+          skipped++;
+          continue;
+        }
+        await ds.transaction(async (tx) => {
+          const [row] = await tx.query<{ id: string }[]>(
+            `INSERT INTO questions ("text", "type", "marks", "negative_marks", "difficulty", "status", "course_id", "topic_id", "owner_id")
+             VALUES ($1, 'CODING', $2, 0, $3, 'READY', $4, $5, $6) RETURNING id`,
+            [c.title, c.marks, c.difficulty, courseId, topicRow.id, ownerId],
+          );
+          await tx.query(
+            `INSERT INTO coding_problems
+               ("question_id", "statement_md", "starter_code", "allowed_languages", "time_limit_ms", "memory_limit_mb", "comparison_mode", "reference_solution")
+             VALUES ($1, $2, $3::jsonb, $5, 2000, 256, 'TRIM', $4)`,
+            [row.id, c.statement, JSON.stringify({ python: c.starter }), c.reference, SEED_LANGUAGES],
+          );
+          let order = 0;
+          for (const t of c.testCases) {
+            await tx.query(
+              `INSERT INTO coding_test_cases ("question_id", "input", "expected_output", "is_sample", "weight", "order")
+               VALUES ($1, $2, $3, $4, $5, $6)`,
+              [row.id, t.input, t.expectedOutput, t.isSample, t.weight, order++],
+            );
+          }
+        });
+        added++;
+      }
+    }
+    console.log(`   ✅ ${bank.course.code} ${bank.course.name}: ${added} questions added${skipped ? `, ${skipped} already there` : ''}`);
+  }
+}
+
+/** #16: every seeded coding question accepts every language (C/C++/Java start from the default templates). */
+const SEED_LANGUAGES = ['python', 'c', 'cpp', 'java'];
+
+/**
+ * Opens the seeded coding questions that an older seed stored as Python-only
+ * (the sample exam's, the easy bank questions and the course banks') to every
+ * language. Questions instructors wrote themselves are left alone. Idempotent.
+ */
+async function seedCodingLanguages(ds: DataSource) {
+  const titles = [
+    ...CODING_PROBLEMS.map((p) => p.title),
+    ...EASY_CODING_QUESTIONS.map((q) => q.title),
+    ...COURSE_BANKS.flatMap((b) => b.topics.flatMap((t) => (t.coding ?? []).map((c) => c.title))),
+  ];
+  const updated = await ds.query<{ question_id: string }[]>(
+    `UPDATE coding_problems SET "allowed_languages" = $1
+      WHERE "allowed_languages" = '{python}'
+        AND ("question_id" IN (SELECT "question_id" FROM exam_questions WHERE "exam_id" = $2)
+          OR "question_id" IN (SELECT id FROM questions WHERE "type" = 'CODING' AND "text" = ANY($3::text[])))
+      RETURNING "question_id"`,
+    [SEED_LANGUAGES, SAMPLE_EXAM_ID, titles],
+  );
+  if (updated.length > 0) console.log(`   ✅ ${updated.length} seeded coding question(s) now accept Python, C, C++ and Java`);
+}
+
+/**
+ * Bank topics for the sample exam's questions, so the question bank's topic
+ * tree has something in it. Only fills questions that have no topic yet.
+ */
+const SEED_TOPICS = [
+  { name: 'Operating systems & networks', types: ['MCQ_SINGLE', 'MCQ_MULTI', 'TRUE_FALSE'] },
+  { name: 'Python basics', types: ['CODING'] },
+];
+
+async function seedTopics(ds: DataSource, ownerId: string) {
+  console.log('\n🗂  Seeding question bank topics…');
+  for (const t of SEED_TOPICS) {
+    const existing = await ds.query<{ id: string }[]>(
+      `SELECT id FROM topics WHERE "course_id" IS NULL AND LOWER("name") = LOWER($1) AND ("owner_id" = $2 OR "owner_id" IS NULL) LIMIT 1`,
+      [t.name, ownerId],
+    );
+    const topicId =
+      existing[0]?.id ??
+      (await ds.query<{ id: string }[]>(`INSERT INTO topics ("name", "owner_id") VALUES ($1, $2) RETURNING id`, [t.name, ownerId]))[0].id;
+    await ds.query(`UPDATE topics SET "owner_id" = $1 WHERE id = $2 AND "owner_id" IS NULL`, [ownerId, topicId]);
+    const updated = await ds.query<{ id: string }[]>(
+      `UPDATE questions SET "topic_id" = $1
+        WHERE "topic_id" IS NULL AND "type"::text = ANY($2)
+          AND id IN (SELECT "question_id" FROM exam_questions WHERE "exam_id" = $3)
+        RETURNING id`,
+      [topicId, t.types, SAMPLE_EXAM_ID],
+    );
+    console.log(`   ✅ "${t.name}"${updated.length ? ` (${updated.length} questions)` : ''}`);
+  }
+}
+
 // ── Main ───────────────────────────────────────────────────────────────────
 
 async function seed() {
   console.log('🔌 Connecting to database…');
+  await convertLegacyRoles();
   await ds.initialize();
   console.log('✅ Connected\n');
 
-  // ── Admin ──────────────────────────────────────────────────────────────
-  console.log('👤 Seeding admin…');
-  const adminResult = await upsertUser(ds, ADMIN.email, ADMIN.fullName, ADMIN.password, 'admin');
-  if (adminResult.created) {
-    console.log(`   ✅ Created admin: ${ADMIN.email} / ${ADMIN.password}`);
-  } else {
-    console.log(`   ⏭  Admin already exists: ${ADMIN.email}`);
+  // ── Instructors and a TA (there is no admin) ─────────────────────────────
+  console.log('👩‍🏫 Seeding instructors…');
+  const instructors = await upsertInstructors(ds, DEFAULT_INSTRUCTORS, { resetPasswords: true });
+  for (const r of instructors) {
+    console.log(`   ${r.status === 'created' ? '✅ Created' : r.status === 'skipped' ? '⚠️  Skipped' : '⏭  Exists '}  ${r.email}${r.reason ? ` (${r.reason})` : ''}`);
   }
+  const instructorId = instructors.find((r) => r.email === INSTRUCTOR.email)!.id;
+  const otherInstructorId = instructors.find((r) => r.email === OTHER_INSTRUCTOR.email)!.id;
+  const ta = await upsertUser(ds, TA.email, TA.fullName, TA.password, 'ta');
+  console.log(`   ${ta.created ? '✅ Created' : '⏭  Exists '}  ${TA.email} (TA)`);
 
-  // ── Students ───────────────────────────────────────────────────────────
-  console.log('\n🎓 Seeding students…');
-  const studentIds: string[] = [];
+  const legacyAdmin = await ds.query<{ id: string }[]>(
+    `UPDATE users SET "isActive" = false WHERE email = $1 AND "isActive" = true RETURNING id`,
+    [LEGACY_ADMIN_EMAIL],
+  );
+  if (legacyAdmin.length > 0) console.log(`   🚫 Deactivated the old ${LEGACY_ADMIN_EMAIL} account (there is no admin any more)`);
 
-  for (const s of STUDENTS) {
-    const userResult = await upsertUser(ds, s.email, s.fullName, s.password, 'student');
-    const studentResult = await upsertStudent(ds, userResult.id, s.collegeId);
-    studentIds.push(studentResult.id);
+  // ── Students: the college's student list ─────────────────────────────
+  console.log('\n🎓 Seeding the college student list…');
+  const roster = await upsertStudents(ds, DEMO_STUDENTS, { resetPasswords: true });
+  const count = (status: string) => roster.filter((r) => r.status === status).length;
+  console.log(`   ✅ ${count('created')} created, ${count('updated')} already there (password reset), ${count('skipped')} skipped`);
+  for (const r of roster.filter((x) => x.status === 'skipped')) console.log(`   ⚠️  Skipped ${r.collegeId} ${r.email}: ${r.reason}`);
+  const enrolledEmails = new Set(ENROLLED_DEMO_STUDENTS.map((s) => s.email));
+  const studentIds = roster.filter((r) => enrolledEmails.has(r.email) && r.studentId).map((r) => r.studentId!);
 
-    if (userResult.created || studentResult.created) {
-      console.log(`   ✅ Created  ${s.fullName.padEnd(20)} | ${s.email.padEnd(28)} | password: ${s.password} | collegeId: ${s.collegeId}`);
-    } else {
-      console.log(`   ⏭  Exists   ${s.fullName.padEnd(20)} | ${s.email}`);
-    }
-  }
+  // ── Courses ────────────────────────────────────────────────────────────
+  console.log('\n🏫 Seeding courses…');
+  const courseId = await seedCourse(ds, SAMPLE_COURSE, instructorId, studentIds, [
+    { userId: ta.id, permissions: TA.permissions },
+  ]);
+  const otherCourseId = await seedCourse(ds, OTHER_COURSE, otherInstructorId, studentIds);
 
-  // ── Active Exam ────────────────────────────────────────────────────────
-  await seedActiveExam(ds);
-  await seedCodingQuestion(ds);
-  await seedBankCodingQuestions(ds);
-  await seedQuestionBank(ds);
-  await seedCourse(ds, studentIds);
+  // ── Exams ──────────────────────────────────────────────────────────────
+  await seedActiveExam(ds, courseId, instructorId);
+  for (const problem of CODING_PROBLEMS) await seedCodingQuestion(ds, problem, instructorId);
+  await seedCodingLanguages(ds);
+  await seedBankCodingQuestions(ds, instructorId);
+  await seedBankObjectiveQuestions(ds, instructorId);
+  await seedTopics(ds, instructorId);
+  await assignExamToCourse(ds, SAMPLE_EXAM_ID, courseId, studentIds);
+  await seedOtherInstructorExam(ds, otherCourseId);
+  await seedCourseBanks(ds, new Map(instructors.map((r) => [r.email, r.id])), studentIds);
+
+  // Rows from before Phase 5 (made by the old admin) go to the main instructor.
+  await backfillOwnership(ds, INSTRUCTOR.email);
 
   console.log('\n──────────────────────────────────────────────────────');
   console.log('📋 Credentials & Exam Summary:');
   console.log('');
-  console.log('  Web app — one login for both roles (http://localhost:3003)');
-  console.log('  Legacy admin portal (http://localhost:3001)');
-  console.log(`    Email:    ${ADMIN.email}`);
-  console.log(`    Password: ${ADMIN.password}`);
-  console.log('');
-  console.log('  Students (web app, or legacy exam client on http://localhost:3002)');
-  for (const s of STUDENTS) {
-    console.log(`    ${s.fullName.padEnd(18)} → ${s.email} / ${s.password}`);
+  console.log('  Web app — one login for everyone (http://localhost:3003)');
+  console.log('  Instructors');
+  for (const i of DEFAULT_INSTRUCTORS) {
+    const courses = COURSE_BANKS.filter((b) => b.instructorEmail === i.email).map((b) => b.course.code);
+    const note = i.email === INSTRUCTOR.email ? ', the sample exam' : '';
+    console.log(`    ${i.fullName.padEnd(18)} → ${i.email} / ${i.password}   (${courses.join(', ')}${note})`);
   }
+  console.log('  Teaching assistant');
+  console.log(`    ${TA.fullName.padEnd(18)} → ${TA.email} / ${TA.password}   (${SAMPLE_COURSE.code}: view exams, monitor, view results)`);
   console.log('');
-  console.log('  The sample exam has 5 multiple-choice questions and 1 coding question (Merge Intervals, 10 marks).');
+  console.log('  Students (web app, or legacy exam client on http://localhost:3002), enrolled in the sample courses');
+  for (const s of ENROLLED_DEMO_STUDENTS) {
+    console.log(`    ${s.fullName.padEnd(18)} → ${s.email} / ${s.password}   (${s.collegeId})`);
+  }
   console.log(
-    `  The question bank also has ${EASY_CODING_QUESTIONS.length} easy coding questions (topic "${EASY_CODING_TOPIC}", tag "sample") to add to new exams.`,
+    `  ${DEMO_STUDENTS.length - ENROLLED_DEMO_STUDENTS.length} more students are on the college list, in no course yet (e.g. ` +
+      `${DEMO_STUDENTS[ENROLLED_DEMO_STUDENTS.length].email} / ${DEMO_STUDENT_PASSWORD}). Enrol them from a course page.`,
+  );
+  console.log('');
+  console.log('  The sample exam has 5 multiple-choice questions and 2 coding questions');
+  console.log(`  (${CODING_PROBLEMS.map((p) => `${p.title}, ${p.marks} marks`).join('; ')}).`);
+  console.log(
+    `  ${INSTRUCTOR.fullName}'s question bank also has ${EASY_CODING_QUESTIONS.length} easy coding questions (topic "${EASY_CODING_TOPIC}", tag "sample") to add to new exams.`,
+  );
+  console.log(
+    `  It also has ${EASY_MCQ_QUESTIONS.length} easy objective questions (topic "${EASY_MCQ_TOPIC}", tag "sample").`,
   );
   console.log('  Active Exam ID for Testing:');
   console.log(`    ${SAMPLE_EXAM_ID}`);

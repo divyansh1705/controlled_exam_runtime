@@ -1,6 +1,6 @@
 /**
  * Dev seed: easy coding questions for the question bank, for testing the code editor,
- * the runner and the grading. They are not linked to any exam; an admin adds them to
+ * the runner and the grading. They are not linked to any exam; an instructor adds them to
  * an exam from the question bank.
  *
  * Each question has two sample cases (the student sees them) and three hidden ones.
