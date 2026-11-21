@@ -33,8 +33,26 @@ export type Platform = 'darwin' | 'linux' | 'win32' | string;
 export interface BlockedKey {
   /** Human-readable, e.g. "Cmd+R" or "Ctrl+Shift+I". Goes into the audit log. */
   label: string;
-  kind: 'shortcut' | 'devtools';
+  /**
+   * `quiet`: blocked, but a habit rather than an attempt to leave the exam (Cmd+S to save,
+   * zooming, printing). It is not recorded as a violation.
+   */
+  kind: 'shortcut' | 'devtools' | 'quiet';
 }
+
+// Blocked with Ctrl/Cmd, but harmless habits (saving, printing, opening, zooming): not recorded.
+const QUIET_MOD_KEYS = new Set([
+  'KeyS', // save page: students press it out of habit in the code editor
+  'KeyP', // print
+  'KeyO', // open file
+  'KeyJ', // downloads
+  'Digit0', // reset zoom
+  'Equal', // zoom in
+  'Minus', // zoom out
+  'NumpadAdd',
+  'NumpadSubtract',
+  'Numpad0',
+]);
 
 const MOD_KEYS = new Set([
   'KeyR', // reload
@@ -91,14 +109,34 @@ const PLAIN_KEYS = new Set(['F5', 'F11', 'F12', 'PrintScreen']);
 function names(platform: Platform) {
   return platform === 'darwin'
     ? { ctrl: 'Ctrl', meta: 'Cmd', alt: 'Option', shift: 'Shift' }
-    : { ctrl: 'Ctrl', meta: 'Super', alt: 'Alt', shift: 'Shift' };
+    : { ctrl: 'Ctrl', meta: 'Win', alt: 'Alt', shift: 'Shift' };
 }
 
-function keyName(input: KeyInput): string {
-  if (input.code.startsWith('Key')) return input.code.slice(3);
-  if (input.code.startsWith('Digit')) return input.code.slice(5);
-  const special: Record<string, string> = { Equal: '+', Minus: '-', Comma: ',', Backquote: '`', Escape: 'Esc' };
-  return special[input.code] ?? input.code;
+function keyName(code: string, platform: Platform): string {
+  const n = names(platform);
+  if (/^(Meta|OS|Super|Command)(Left|Right)?$/.test(code)) return n.meta;
+  if (/^Control(Left|Right)?$/.test(code)) return n.ctrl;
+  if (/^Alt(Left|Right)?$/.test(code)) return n.alt;
+  if (/^Shift(Left|Right)?$/.test(code)) return n.shift;
+  if (code.startsWith('Key')) return code.slice(3);
+  if (code.startsWith('Digit')) return code.slice(5);
+  if (/^Numpad\d$/.test(code)) return `Numpad ${code.slice(6)}`;
+  const special: Record<string, string> = {
+    Equal: '+', Minus: '-', Comma: ',', Period: '.', Slash: '/', Backslash: '\\',
+    Semicolon: ';', Quote: "'", BracketLeft: '[', BracketRight: ']', Backquote: '`',
+    Escape: 'Esc', ArrowLeft: 'Left', ArrowRight: 'Right', ArrowUp: 'Up', ArrowDown: 'Down',
+    PageUp: 'Page Up', PageDown: 'Page Down', PrintScreen: 'Print Screen',
+    CapsLock: 'Caps Lock', NumLock: 'Num Lock', ScrollLock: 'Scroll Lock',
+    ContextMenu: 'Menu', NumpadAdd: 'Numpad +', NumpadSubtract: 'Numpad -',
+    NumpadMultiply: 'Numpad *', NumpadDivide: 'Numpad /', NumpadDecimal: 'Numpad .',
+    NumpadEnter: 'Numpad Enter', NumpadEqual: 'Numpad =',
+  };
+  return special[code] ?? code;
+}
+
+/** Display only: keep Electron's accelerator strings unchanged for registration. */
+export function describeAccelerator(accelerator: string, platform: Platform): string {
+  return accelerator.split('+').map(key => keyName(key, platform)).join('+');
 }
 
 /** "Cmd+Shift+R" style label for the combination the student pressed. */
@@ -110,8 +148,9 @@ export function describeShortcut(input: KeyInput, platform: Platform): string {
   if (input.alt) parts.push(n.alt);
   if (input.shift) parts.push(n.shift);
   const isModifierKey = /^(Control|Meta|Alt|Shift|OS)(Left|Right)?$/.test(input.code);
-  if (!isModifierKey) parts.push(keyName(input));
-  return parts.join('+') || input.code;
+  if (!isModifierKey) parts.push(keyName(input.code, platform));
+  else if (!parts.includes(keyName(input.code, platform))) parts.push(keyName(input.code, platform));
+  return parts.join('+');
 }
 
 /** The blocked combination, or null when the key press is allowed. */
@@ -130,6 +169,7 @@ export function blockedKey(input: KeyInput, platform: Platform): BlockedKey | nu
   if (input.meta && input.alt && DEVTOOLS_META_ALT.has(code)) return block('devtools');
 
   if (PLAIN_KEYS.has(code)) return block();
+  if (mod && !input.shift && !input.alt && QUIET_MOD_KEYS.has(code)) return block('quiet');
   if (mod && MOD_KEYS.has(code)) return block();
   if (mod && input.shift && MOD_SHIFT_KEYS.has(code)) return block();
 

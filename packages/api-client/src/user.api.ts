@@ -1,49 +1,31 @@
 // Owner: Person A (Identity/Auth/Security)
-// Not explicitly enumerated in the file-structure doc's api-client list, but
-// added following the same one-file-per-domain pattern since Person A owns
-// student management on both backend and admin portal.
+// Students are the college's accounts (seeded from the college's student list);
+// staff can't create them. They find them in the directory and enrol them.
 
-import type { Student, StudentLookupResponse } from '@secure-exam/types';
+import type { Student, StudentDirectoryPage, StudentLookupResponse } from '@secure-exam/types';
 import { apiClient } from './client';
-
-export interface CreateStudentPayload {
-  collegeId: string;
-  fullName: string;
-  email: string;
-  password?: string;
-}
 
 export interface StudentWithUser extends Student {
   user: { id: string; email: string; fullName: string; isActive: boolean };
 }
 
-export interface BulkImportResponse {
-  createdCount: number;
-  skipped: Array<{ collegeId: string; reason: string }>;
-}
-
+/** Students enrolled in the caller's courses. */
 export async function listStudents(): Promise<StudentWithUser[]> {
   const { data } = await apiClient.get<StudentWithUser[]>('/students');
   return data;
 }
 
-export async function createStudent(payload: CreateStudentPayload): Promise<StudentWithUser> {
-  const { data } = await apiClient.post<StudentWithUser>('/students', payload);
-  return data;
-}
-
-export async function bulkImportStudents(
-  students: CreateStudentPayload[],
-): Promise<BulkImportResponse> {
-  const { data } = await apiClient.post<BulkImportResponse>('/students/bulk-import', {
-    students,
+/** The college's whole student list, searched by email, college ID or name, a page at a time. */
+export async function searchStudentDirectory(params: { search?: string; limit?: number; offset?: number } = {}): Promise<StudentDirectoryPage> {
+  const { data } = await apiClient.get<StudentDirectoryPage>('/students/directory', {
+    params: { search: params.search?.trim() || undefined, limit: params.limit, offset: params.offset },
   });
   return data;
 }
 
 export async function updateStudent(
   id: string,
-  payload: Partial<Pick<CreateStudentPayload, 'fullName' | 'email'>> & { isActive?: boolean },
+  payload: { fullName?: string; email?: string; isActive?: boolean },
 ): Promise<StudentWithUser> {
   const { data } = await apiClient.patch<StudentWithUser>(`/students/${id}`, payload);
   return data;

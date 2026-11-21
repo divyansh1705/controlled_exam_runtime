@@ -9,6 +9,10 @@ export enum NotificationType {
   EXAM_PUBLISHED = 'EXAM_PUBLISHED',
   EXAM_EXTENDED = 'EXAM_EXTENDED',
   RESULT_PUBLISHED = 'RESULT_PUBLISHED',
+  /** Person A (Phase 5): a published exam's times were changed. */
+  EXAM_RESCHEDULED = 'EXAM_RESCHEDULED',
+  /** Staff opened (started) a published exam: registered students may now attempt it. */
+  EXAM_OPENED = 'EXAM_OPENED',
 }
 
 export interface Notification {

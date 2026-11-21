@@ -10,12 +10,14 @@ import {
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectDataSource, InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, Repository } from 'typeorm';
+import { assertAttemptSession } from '../attempt/attempt-session';
 import { AttemptEntity } from '../attempt/entities/attempt.entity';
 import { AnswerEntity } from './entities/answer.entity';
 import { SubmissionEntity } from './entities/submission.entity';
 import { ResultEntity } from './entities/result.entity';
 import { AttemptService } from '../attempt/attempt.service';
 import { TimerService } from '../attempt/timer.service';
+import { effectiveExpiresAt } from '../attempt/timer-pause';
 import { AttemptStatus } from '@secure-exam/types';
 import type { JwtPayload, Result, Submission } from '@secure-exam/types';
 import { SubmitAttemptDto } from '@secure-exam/validation';
@@ -98,6 +100,7 @@ export class SubmissionService {
   async withLockedInProgressAttempt<T>(
     attemptId: string,
     work: (manager: EntityManager, attempt: AttemptEntity) => Promise<T>,
+    user?: JwtPayload,
   ): Promise<T> {
     return this.dataSource.transaction(async (manager) => {
       const attempt = await manager.getRepository(AttemptEntity).findOne({
@@ -107,6 +110,7 @@ export class SubmissionService {
       if (!attempt) {
         throw new NotFoundException('Attempt not found');
       }
+      if (user) assertAttemptSession(attempt, user);
       if (attempt.status !== AttemptStatus.IN_PROGRESS) {
         throw new ConflictException('This attempt has already been submitted');
       }
@@ -140,7 +144,7 @@ export class SubmissionService {
       throw new ConflictException('This attempt has already been submitted');
     }
 
-    if (!this.timerService.isAttemptValid(new Date(), attempt.expiresAt)) {
+    if (!this.timerService.isAttemptValid(new Date(), effectiveExpiresAt(attempt))) {
       const outcome = await this.withLockedInProgressAttempt(attemptId, (manager, lockedAttempt) =>
         this.finalizeLocked(manager, lockedAttempt, true),
       );
@@ -167,7 +171,7 @@ export class SubmissionService {
       throw new ConflictException('This attempt has already been submitted');
     }
 
-    const isAutoSubmit = !this.timerService.isAttemptValid(new Date(), attempt.expiresAt);
+    const isAutoSubmit = !this.timerService.isAttemptValid(new Date(), effectiveExpiresAt(attempt));
 
     // If this call loses a race against a concurrent submit for the same
     // attempt, withLockedInProgressAttempt throws ConflictException here —
@@ -175,6 +179,7 @@ export class SubmissionService {
     // clean, deterministic 409 instead of a raw constraint-violation error.
     const outcome = await this.withLockedInProgressAttempt(attemptId, (manager, lockedAttempt) =>
       this.finalizeLocked(manager, lockedAttempt, isAutoSubmit),
+      user,
     );
 
     await this.logFinalizeAudit(outcome, isAutoSubmit, user.sub);
@@ -322,6 +327,8 @@ export class SubmissionService {
    * expected and harmless — never blocks the rest of the sweep.
    */
   async sweepExpiredAttempts(now: Date = new Date()): Promise<{ sweptCount: number; failedCount: number }> {
+    // Device changes that were never completed give no time back (timer-pause.ts).
+    await this.attemptService.releaseLapsedTimerPauses(now);
     const expiredIds = await this.attemptService.findExpiredInProgressAttemptIds(now);
     let sweptCount = 0;
     let failedCount = 0;
@@ -329,8 +336,10 @@ export class SubmissionService {
     for (const attemptId of expiredIds) {
       try {
         const outcome = await this.withLockedInProgressAttempt(attemptId, (manager, attempt) =>
-          this.finalizeLocked(manager, attempt, true),
+          // Paused for a device change since the scan: not expiring any more.
+          attempt.timerPausedAt && effectiveExpiresAt(attempt) > new Date() ? Promise.resolve(null) : this.finalizeLocked(manager, attempt, true),
         );
+        if (!outcome) continue;
         await this.logFinalizeAudit(outcome, true, outcome.studentId);
         sweptCount++;
       } catch (err) {
@@ -352,10 +361,12 @@ export class SubmissionService {
     return { sweptCount, failedCount };
   }
 
-  // ---- Admin: submissions list + result publishing (/results screen) ----
+  // ---- Staff: submissions list + result publishing (/results screen) ----
 
   async listSubmissions(query: {
     examId?: string;
+    /** Only these exams (the ones the caller may see results of). */
+    examIds: string[];
     published?: boolean;
     page?: number;
     limit?: number;
@@ -377,6 +388,7 @@ export class SubmissionService {
         'result.attemptId = submission.attemptId',
       );
 
+    qb.andWhere('result.examId = ANY(:examIds::uuid[])', { examIds: query.examIds });
     if (query.examId) {
       qb.andWhere('result.examId = :examId', { examId: query.examId });
     }
@@ -408,12 +420,12 @@ export class SubmissionService {
   }
 
   /**
-   * `score` is validated against this result's own `maxScore` — an admin
+   * `score` is validated against this result's own `maxScore` — an instructor
    * cannot set a score above the maximum the attempt could actually earn.
    * Decimal scores ARE valid (partial-credit marking schemes are common;
    * the DTO caps precision at 2 decimal places — see OverrideResultScoreDto).
    */
-  async overrideScore(attemptId: string, score: number, adminId: string): Promise<Result> {
+  async overrideScore(attemptId: string, score: number, actorId: string): Promise<Result> {
     const result = await this.resultRepository.findOne({ where: { attemptId } });
     if (!result) throw new NotFoundException('Result not found for this attempt');
 
@@ -434,13 +446,13 @@ export class SubmissionService {
       this.auditService,
       'RESULT_SCORE_OVERRIDDEN',
       { attemptId, newScore: score },
-      adminId,
+      actorId,
     );
 
     return toResultDto(saved);
   }
 
-  async setPublished(attemptId: string, publish: boolean, adminId: string): Promise<Result> {
+  async setPublished(attemptId: string, publish: boolean, actorId: string): Promise<Result> {
     const result = await this.resultRepository.findOne({ where: { attemptId } });
     if (!result) throw new NotFoundException('Result not found for this attempt');
 
@@ -453,7 +465,7 @@ export class SubmissionService {
       this.auditService,
       publish ? 'RESULT_PUBLISHED' : 'RESULT_UNPUBLISHED',
       { attemptId, examId: result.examId },
-      adminId,
+      actorId,
     );
 
     return toResultDto(saved);

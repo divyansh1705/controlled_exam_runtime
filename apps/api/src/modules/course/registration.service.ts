@@ -23,7 +23,7 @@ import type {
 import { In, Repository } from 'typeorm';
 import { AuditService } from '../audit/audit.service';
 import { ExamEntity } from '../exam/entities/exam.entity';
-import { NotificationService } from '../notification/notification.service';
+import { NotificationService, type NotificationInput } from '../notification/notification.service';
 import { StudentEntity } from '../user/entities/student.entity';
 import { toStudentSummary, UserService } from '../user/user.service';
 import { CourseEnrollmentEntity } from './entities/course-enrollment.entity';
@@ -250,6 +250,12 @@ export class RegistrationService {
     return { registrationsRemoved: removed };
   }
 
+  /** Notifies every registered student (e.g. the exam was rescheduled). Returns how many. */
+  async notifyRegistered(examId: string, input: NotificationInput): Promise<number> {
+    const userIds = await this.registeredUserIds(examId);
+    return userIds.length ? this.notificationService.notifyMany(userIds, input) : 0;
+  }
+
   /** Called after students are enrolled in a course: registers them for its exams. */
   async expandCourseEnrollments(courseId: string, studentIds: string[]): Promise<number> {
     if (studentIds.length === 0) return 0;
@@ -357,12 +363,13 @@ export function examPublishedNotification(exam: ExamEntity, message?: string) {
   const starts = exam.startTime.toISOString();
   return {
     type: NotificationType.EXAM_PUBLISHED,
-    title: `New exam: ${exam.title}`,
+    title: `New exam scheduled: ${exam.title}`,
+    // Times go in `data`: the dashboard shows them in the student's own time zone.
     body:
       `You are registered for "${exam.title}" (${exam.durationMinutes} min). ` +
-      `It opens at ${starts}.` +
+      `Nothing to do yet: you can start it once the exam opens.` +
       (message ? ` ${message}` : ''),
-    data: { examId: exam.id, startTime: starts },
+    data: { examId: exam.id, startTime: starts, endTime: exam.endTime.toISOString() },
   };
 }
 

@@ -4,22 +4,33 @@
  * Host contract (exam-taking page):
  *  - `question` is the PublicQuestion from GET /attempts/:id/questions (has `coding`).
  *  - `savedCode` is the answer's textResponse (the saved draft), if any.
- *  - `onSaveDraft(code)` must persist through the exam's saveAnswer()
- *    ({ textResponse: code }) so drafts survive offline and are graded at the
- *    end if the student never presses Submit.
+ *  - `onSaveDraft(text)` must persist through the exam's saveAnswer()
+ *    ({ textResponse: text }) so drafts survive offline and are graded at the
+ *    end only when the exam permits grading unsubmitted drafts. `text` is the
+ *    code with its language (#16: encodeCodeDraft; plain text for Python), so
+ *    the host stores it as is. `onCodeChange(text)` reports the same text on
+ *    every edit and language switch.
  *  - `localRunner` runs Run / Run samples on this PC (Person C's Electron app:
  *    `desktopLocalRunner()`). Without it, Run uses the server if allowed.
  */
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
+  CODE_LANGUAGE_ORDER,
+  CODE_LANGUAGES,
   CODE_MAX_LENGTH,
   CodeLanguage,
   CodeRunKind,
+  decodeCodeDraft,
+  defaultLanguage,
+  encodeCodeDraft,
+  starterFor,
   CodeSubmissionStatus,
   type LocalRunner,
+  type CodeSubmitResponse,
+  type LatestCodeSubmission,
   type PublicQuestion,
 } from '@secure-exam/types';
-import { Alert, Badge, Button, Textarea, cx } from '../ui';
+import { Alert, Badge, Button, Dialog, Select, Textarea, cx } from '../ui';
 import { SplitPane } from '../ui/SplitPane';
 import { CodeEditor } from './editor/CodeEditor';
 import { friendlyRunError, useCodeRun, type LastAction } from './hooks/useCodeRun';
@@ -31,8 +42,12 @@ export interface CodingQuestionViewProps {
   attemptId: string;
   question: PublicQuestion;
   savedCode?: string | null;
-  onSaveDraft: (code: string) => void | Promise<void>;
+  onSaveDraft: (text: string) => void | Promise<void>;
   draftDelayMs?: number;
+  /** The draft text (as saved by onSaveDraft) on every change. */
+  onCodeChange?: (text: string) => void;
+  onSubmitted?: (code: string, result: CodeSubmitResponse, language: CodeLanguage) => void;
+  latestSubmission?: LatestCodeSubmission;
   /** Exam mode: block external paste and the editor context menu. */
   hardened?: boolean;
   onBlockedPaste?: () => void;
@@ -58,6 +73,7 @@ export function CodingQuestionView({
   savedCode,
   onSaveDraft,
   draftDelayMs = 1500,
+  onCodeChange, onSubmitted, latestSubmission,
   hardened = true,
   onBlockedPaste,
   online = true,
@@ -65,15 +81,45 @@ export function CodingQuestionView({
   localRunner,
 }: CodingQuestionViewProps) {
   const problem = question.coding;
-  const starter = problem?.starterCode?.[CodeLanguage.PYTHON] ?? '';
-  const [code, setCode] = useState(savedCode ?? starter);
+  const allowed = CODE_LANGUAGE_ORDER.filter((l) => problem?.allowedLanguages?.includes(l));
+  const languages = allowed.length > 0 ? allowed : [CodeLanguage.PYTHON];
+  // The saved draft remembers its language; otherwise start in the question's default.
+  const [initial] = useState(() => {
+    const saved = decodeCodeDraft(savedCode);
+    const language = saved.language && languages.includes(saved.language) ? saved.language : defaultLanguage(languages);
+    return { language, code: saved.language === language && saved.code ? saved.code : null };
+  });
+  const [language, setLanguage] = useState<CodeLanguage>(initial.language);
+  /** Code per language for this visit, so switching back keeps what was typed (like LeetCode). */
+  const [codes, setCodes] = useState<Partial<Record<CodeLanguage, string>>>(() =>
+    initial.code !== null ? { [initial.language]: initial.code } : {},
+  );
+  const starter = starterFor(problem?.starterCode, language);
+  const code = codes[language] ?? starter;
+  const setCode = useCallback((next: string) => setCodes((m) => ({ ...m, [language]: next })), [language]);
   const [stdin, setStdin] = useState(problem?.samples[0]?.input ?? '');
   const [last, setLast] = useState<LastAction>(null);
   const [error, setError] = useState<string | null>(null);
   const [pasteBlocked, setPasteBlocked] = useState(false);
+  // Confirmations are shown in the page, never with window.confirm(): a native OS dialog takes
+  // focus from the exam window, which the exam app records as a violation.
+  const [pendingConfirm, setPendingConfirm] = useState<{ kind: 'language'; next: CodeLanguage } | { kind: 'reset' } | null>(null);
 
-  const { status: draftStatus } = useDebouncedDraft(code, onSaveDraft, draftDelayMs);
-  const { run, submit, busy, canRun, configLoading } = useCodeRun(attemptId, question.id, problem, localRunner);
+  // The saved draft is the code in the language the student last typed in (or submitted): that is
+  // what gets graded without a Submit, when the exam allows it. Only picking another language in the
+  // menu doesn't change it, so looking at another language never replaces the work. The host sees
+  // the same text on every change.
+  const [draftLanguage, setDraftLanguage] = useState<CodeLanguage>(initial.language);
+  const draftCode = codes[draftLanguage] ?? starterFor(problem?.starterCode, draftLanguage);
+  const draft = encodeCodeDraft(draftLanguage, draftCode);
+  useEffect(() => { onCodeChange?.(draft); }, [draft, onCodeChange]);
+  const changeCode = (value: string) => {
+    setCode(value);
+    setDraftLanguage(language);
+    onCodeChange?.(encodeCodeDraft(language, value));
+  };
+  const { status: draftStatus } = useDebouncedDraft(draft, onSaveDraft, draftDelayMs);
+  const { run, submit, busy, canRun, configLoading } = useCodeRun(attemptId, question.id, problem, localRunner, language);
 
   const handleBlockedPaste = useCallback(() => {
     setPasteBlocked(true);
@@ -115,12 +161,20 @@ export function CodingQuestionView({
       },
     );
   };
-  const doSubmit = () => {
+  const doSubmit = async () => {
     setError(null);
-    submit.mutate(code, {
-      onSuccess: (result) => setLast({ kind: 'submit', result }),
-      onError: (e) => setError(friendlyRunError(e)),
-    });
+    const submittedCode = code;
+    const submittedLanguage = language;
+    try {
+      // mutateAsync keeps the host's confirmation callback alive if the student
+      // navigates to another question before this request finishes.
+      const result = await submit.mutateAsync(submittedCode);
+      setLast({ kind: 'submit', result });
+      setDraftLanguage(submittedLanguage); // the submitted language is now the one being worked in
+      onSubmitted?.(submittedCode, result, submittedLanguage);
+    } catch (error) {
+      setError(friendlyRunError(error));
+    }
   };
   const submittedAt =
     last?.kind === 'submit'
@@ -128,9 +182,54 @@ export function CodingQuestionView({
         ? new Date(last.result.savedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
         : `· ${last.result.result?.score} / ${last.result.result?.maxScore}`
       : null;
-  const resetToStarter = () => {
-    if (code === starter || window.confirm('Replace your code with the starter code?')) setCode(starter);
+  // Code and language must both match what was submitted.
+  const submittedIsCurrent = !!latestSubmission && latestSubmission.code === code && latestSubmission.language === language;
+  const applyLanguage = (next: CodeLanguage) => {
+    setLanguage(next);
+    setLast(null);
+    setError(null);
   };
+  const switchLanguage = (next: CodeLanguage) => {
+    if (next === language) return;
+    const changed = code !== starter && code.trim() !== '';
+    if (changed) setPendingConfirm({ kind: 'language', next });
+    else applyLanguage(next);
+  };
+  const resetToStarter = () => {
+    if (code === starter) return;
+    setPendingConfirm({ kind: 'reset' });
+  };
+  const closeConfirm = () => setPendingConfirm(null);
+  const acceptConfirm = () => {
+    if (pendingConfirm?.kind === 'language') applyLanguage(pendingConfirm.next);
+    else if (pendingConfirm?.kind === 'reset') changeCode(starter);
+    setPendingConfirm(null);
+  };
+  const confirmDialog = pendingConfirm && (
+    <Dialog
+      open
+      title={pendingConfirm.kind === 'language' ? `Switch to ${CODE_LANGUAGES[pendingConfirm.next].shortLabel}?` : 'Replace your code with the starter code?'}
+      onClose={closeConfirm}
+      footer={
+        <>
+          <Button onClick={closeConfirm}>
+            {pendingConfirm.kind === 'language' ? `Keep ${CODE_LANGUAGES[language].shortLabel}` : 'Keep my code'}
+          </Button>
+          <Button variant="primary" onClick={acceptConfirm}>
+            {pendingConfirm.kind === 'language' ? `Switch to ${CODE_LANGUAGES[pendingConfirm.next].shortLabel}` : 'Replace with starter code'}
+          </Button>
+        </>
+      }
+    >
+      <p className="text-sm text-muted-foreground">
+        {pendingConfirm.kind === 'language'
+          ? `Your ${CODE_LANGUAGES[language].shortLabel} code stays saved. Once you start typing in ` +
+            `${CODE_LANGUAGES[pendingConfirm.next].shortLabel}, your ${CODE_LANGUAGES[pendingConfirm.next].shortLabel} code becomes your saved answer instead. ` +
+            'Submit always submits the language shown in the editor.'
+          : `Your ${CODE_LANGUAGES[language].shortLabel} code on this question will be replaced with the starter code. This can't be undone.`}
+      </p>
+    </Dialog>
+  );
 
   const statementPane = (
     <div className="h-full overflow-y-auto rounded-lg border border-border bg-card p-4">
@@ -139,18 +238,36 @@ export function CodingQuestionView({
   );
 
   const editorPane = (
-    <div className="flex h-full min-h-[160px] flex-col gap-2">
-      <div className="flex items-center justify-between text-xs">
-        <span className="font-medium text-muted-foreground">Python 3.12</span>
-        <span className="flex items-center gap-3">
-          <span className={cx(tooLong ? 'text-destructive' : 'text-muted-foreground')}>
+    <div className="flex h-full min-h-0 flex-col gap-2">
+      {/* shrink-0: in a short pane the toolbar must keep its height, or the language picker gets cut off. */}
+      <div className="flex shrink-0 items-center justify-between gap-3 text-xs">
+        {languages.length > 1 ? (
+          <Select
+            aria-label="Language"
+            compact
+            className="w-auto shrink-0"
+            value={language}
+            disabled={readOnly || busy}
+            onChange={(e) => switchLanguage(e.target.value as CodeLanguage)}
+          >
+            {languages.map((l) => (
+              <option key={l} value={l}>
+                {CODE_LANGUAGES[l].label}
+              </option>
+            ))}
+          </Select>
+        ) : (
+          <span className="font-medium text-muted-foreground">{CODE_LANGUAGES[language].label}</span>
+        )}
+        <span className="flex min-w-0 items-center gap-3">
+          <span className={cx('shrink-0', tooLong ? 'text-destructive' : 'text-muted-foreground')}>
             {code.length.toLocaleString()} / {CODE_MAX_LENGTH.toLocaleString()}
           </span>
-          <span className={cx(draftStatus === 'error' ? 'text-destructive' : 'text-muted-foreground')} aria-live="polite">
+          <span className={cx('truncate', draftStatus === 'error' ? 'text-destructive' : 'text-muted-foreground')} aria-live="polite">
             {DRAFT_TEXT[draftStatus]}
           </span>
           {!readOnly && starter && (
-            <button type="button" className="text-muted-foreground underline hover:text-foreground" onClick={resetToStarter}>
+            <button type="button" className="shrink-0 text-muted-foreground underline hover:text-foreground" onClick={resetToStarter}>
               Reset
             </button>
           )}
@@ -159,7 +276,8 @@ export function CodingQuestionView({
       <div className="min-h-0 flex-1">
         <CodeEditor
           value={code}
-          onChange={setCode}
+          language={CODE_LANGUAGES[language].monacoId}
+          onChange={changeCode}
           readOnly={readOnly}
           hardened={hardened}
           onBlockedPaste={handleBlockedPaste}
@@ -200,7 +318,7 @@ export function CodingQuestionView({
             <Button variant="primary" onClick={doSubmit} disabled={!canSubmit} busy={submit.isPending}>
               Submit
             </Button>
-            {submittedAt && <Badge tone="blue">Submitted {submittedAt}</Badge>}
+            {latestSubmission ? <Badge tone={submittedIsCurrent ? 'blue' : 'amber'}>{submittedIsCurrent ? 'Submitted' : 'Changed since submission — submit again'}</Badge> : submittedAt && <Badge tone="blue">Submitted {submittedAt}</Badge>}
           </div>
           {(runReason ?? submitReason) && <p className="text-xs text-muted-foreground">{runReason ?? submitReason}</p>}
           {error && <Alert>{error}</Alert>}
@@ -213,31 +331,34 @@ export function CodingQuestionView({
   // Draggable dividers: problem | workspace (wide screens; stacked on narrow ones),
   // and editor / run panel inside the workspace. Sizes are remembered per browser.
   return (
-    <SplitPane
-      className="h-full min-h-[600px]"
-      direction="horizontal"
-      defaultRatio={38}
-      minRatio={20}
-      maxRatio={65}
-      collapseBelow={1024}
-      storageKey="exam-content-ui:split:problem"
-      label="Resize problem and editor"
-      first={statementPane}
-      second={
-        <div className="h-full min-h-[560px]">
-          <SplitPane
-            className="h-full"
-            direction="vertical"
-            defaultRatio={60}
-            minRatio={25}
-            maxRatio={80}
-            storageKey="exam-content-ui:split:editor"
-            label="Resize editor and output"
-            first={editorPane}
-            second={runPane}
-          />
-        </div>
-      }
-    />
+    <>
+      {confirmDialog}
+      <SplitPane
+        className="h-auto lg:h-[clamp(560px,calc(100dvh-220px),900px)]"
+        direction="horizontal"
+        defaultRatio={38}
+        minRatio={20}
+        maxRatio={65}
+        collapseBelow={1024}
+        storageKey="exam-content-ui:split:problem"
+        label="Resize problem and editor"
+        first={statementPane}
+        second={
+          <div className="h-[560px] min-h-0 lg:h-full">
+            <SplitPane
+              className="h-full"
+              direction="vertical"
+              defaultRatio={60}
+              minRatio={25}
+              maxRatio={80}
+              storageKey="exam-content-ui:split:editor"
+              label="Resize editor and output"
+              first={editorPane}
+              second={runPane}
+            />
+          </div>
+        }
+      />
+    </>
   );
 }

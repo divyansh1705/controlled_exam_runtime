@@ -67,6 +67,13 @@ pnpm-debug.log*
 .vite/
 .turbo/
 .vitest-cache/
+__pycache__/
+*.py[cod]
+
+# Local assistant configuration and credentials
+/.codex/
+/.agents/
+/.aws/
 
 # IDE and OS files
 .vscode/
@@ -81,3 +88,9 @@ desktop.ini
 
 # Local Docker overrides
 docker-compose.override.yml
+
+# Local intranet deployment material
+infra/intranet/tls/
+infra/intranet/backups/
+infra/intranet/attempts.json
+infra/intranet/compose.override.yml

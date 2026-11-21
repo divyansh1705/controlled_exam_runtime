@@ -1,16 +1,16 @@
 // Owner: Person A (Identity/Auth/Security)
 
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { CreateStudentDto, UpdateStudentDto } from '@secure-exam/validation';
+import { UpdateStudentDto } from '@secure-exam/validation';
 import { AuditEventType, Role } from '@secure-exam/types';
-import type { StudentSummary } from '@secure-exam/types';
+import type { StudentDirectoryPage, StudentSummary } from '@secure-exam/types';
 import * as bcrypt from 'bcrypt';
-import { randomBytes } from 'crypto';
 import { In, Repository } from 'typeorm';
 import { AuditService } from '../audit/audit.service';
 import { StudentEntity } from './entities/student.entity';
@@ -24,11 +24,6 @@ export interface ResolvedStudents {
   /** Keyed by the identifier the caller passed in. */
   found: Map<string, StudentEntity>;
   notFound: string[];
-}
-
-export interface BulkImportResult {
-  createdCount: number;
-  skipped: Array<{ collegeId: string; reason: string }>;
 }
 
 @Injectable()
@@ -69,8 +64,48 @@ export class UserService {
     return user?.refreshTokenHash ?? null;
   }
 
-  async listStudents(): Promise<StudentEntity[]> {
-    return this.studentRepository.find({ relations: ['user'] });
+  /** Students enrolled in at least one of `courseIds` (staff see only their own courses' students). */
+  async listStudentsInCourses(courseIds: string[]): Promise<StudentEntity[]> {
+    if (courseIds.length === 0) return [];
+    return this.studentRepository
+      .createQueryBuilder('s')
+      .leftJoinAndSelect('s.user', 'user')
+      .where(
+        's.id IN (SELECT e."studentId" FROM "course_enrollments" e WHERE e."courseId" = ANY(:courseIds::uuid[]))',
+        { courseIds },
+      )
+      .getMany();
+  }
+
+  /** Case-insensitive, since people type emails in any case. */
+  findByEmail(email: string): Promise<UserEntity | null> {
+    return this.userRepository
+      .createQueryBuilder('user')
+      .where('LOWER(user.email) = LOWER(:email)', { email: email.trim() })
+      .getOne();
+  }
+
+  /**
+   * An instructor or TA account. Instructors come from the seed script (no
+   * one in the app can create them); TAs are created by an instructor when
+   * added to a course.
+   */
+  async createStaffUser(input: {
+    email: string;
+    fullName: string;
+    password: string;
+    role: Role.INSTRUCTOR | Role.TA;
+  }): Promise<UserEntity> {
+    if (input.password.length < 8) throw new BadRequestException('The password must be at least 8 characters');
+    if (await this.findByEmail(input.email)) throw new ConflictException('Email already registered');
+    return this.userRepository.save(
+      this.userRepository.create({
+        email: input.email.trim(),
+        fullName: input.fullName.trim(),
+        role: input.role,
+        passwordHash: await bcrypt.hash(input.password, BCRYPT_ROUNDS),
+      }),
+    );
   }
 
   async findStudentById(id: string): Promise<StudentEntity | null> {
@@ -79,7 +114,7 @@ export class UserService {
 
   /**
    * Resolves a mixed list of students.id, users.id or college IDs to Student
-   * records, so admin screens can accept whichever the operator has to hand.
+   * records, so staff screens can accept whichever the operator has to hand.
    */
   async resolveStudents(identifiers: string[]): Promise<ResolvedStudents> {
     const unique = [...new Set(identifiers.map((i) => i.trim()).filter(Boolean))];
@@ -134,68 +169,29 @@ export class UserService {
     });
   }
 
-  async createStudent(dto: CreateStudentDto, actorId: string): Promise<StudentEntity> {
-    const existingByEmail = await this.userRepository.findOne({ where: { email: dto.email } });
-    if (existingByEmail) throw new ConflictException('Email already registered');
-
-    const existingByCollegeId = await this.studentRepository.findOne({
-      where: { collegeId: dto.collegeId },
-    });
-    if (existingByCollegeId) throw new ConflictException('College ID already registered');
-
-    const plainPassword = dto.password ?? randomBytes(9).toString('base64url');
-    const passwordHash = await bcrypt.hash(plainPassword, BCRYPT_ROUNDS);
-
-    const user = await this.userRepository.save(
-      this.userRepository.create({
-        email: dto.email,
-        fullName: dto.fullName,
-        role: Role.STUDENT,
-        passwordHash,
-      }),
-    );
-
-    const student = await this.studentRepository.save(
-      this.studentRepository.create({
-        userId: user.id,
-        collegeId: dto.collegeId,
-      }),
-    );
-
-    await this.auditService.logEvent(
-      AuditEventType.STUDENT_CREATED,
-      { studentId: student.id, collegeId: dto.collegeId },
-      actorId,
-    );
-
-    return student;
-  }
-
-  async bulkImportStudents(
-    dtos: CreateStudentDto[],
-    actorId: string,
-  ): Promise<BulkImportResult> {
-    const result: BulkImportResult = { createdCount: 0, skipped: [] };
-
-    for (const dto of dtos) {
-      try {
-        await this.createStudent(dto, actorId);
-        result.createdCount += 1;
-      } catch (err) {
-        result.skipped.push({
-          collegeId: dto.collegeId,
-          reason: err instanceof Error ? err.message : 'Unknown error',
-        });
-      }
+  /**
+   * The college's student list, for enrolling and registering students: every
+   * student account, searched by college ID, email or name. Accounts come from
+   * the seeded college list; staff can't create them.
+   */
+  async searchStudentDirectory(search: string | undefined, limit: number, offset: number): Promise<StudentDirectoryPage> {
+    const qb = this.studentRepository.createQueryBuilder('s').innerJoinAndSelect('s.user', 'user');
+    const q = search?.trim();
+    if (q) {
+      const pattern = `%${q.replace(/[\\%_]/g, '\\$&')}%`;
+      qb.where('(s.collegeId ILIKE :pattern OR user.email ILIKE :pattern OR user.fullName ILIKE :pattern)', { pattern });
     }
-
-    await this.auditService.logEvent(
-      AuditEventType.STUDENT_BULK_IMPORTED,
-      { attempted: dtos.length, createdCount: result.createdCount, skippedCount: result.skipped.length },
-      actorId,
-    );
-
-    return result;
+    const [rows, total] = await qb.orderBy('s.collegeId', 'ASC').skip(offset).take(limit).getManyAndCount();
+    return {
+      items: rows.map((s) => ({
+        id: s.id,
+        collegeId: s.collegeId,
+        fullName: s.user.fullName,
+        email: s.user.email,
+        isActive: s.user.isActive,
+      })),
+      total,
+    };
   }
 
   async updateStudent(
